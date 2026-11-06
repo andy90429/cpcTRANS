@@ -1,0 +1,29 @@
+[database]
+driver = sqlite
+test_only = yes
+path = fuelcore_test.sqlite3
+; MySQL: set driver = mysql and fill in the test-server settings below.
+; host =
+; port = 3306
+; user =
+; password =
+; database = fuelcore_test
+; code_database = fuelcore_test_code
+
+[conversion]
+user_code = USER1
+cusboxno = Z000
+write_codes = yes
+other = 以油駁船方式為國際航線船加油報單數量單價價格
+    係預購價值其確實數量以交貨紀錄單為準申請更正
+    僅請准予報備
+
+    本批貨物係供在港國際航線船舶就地採購專用燃料(油)
+
+[buyer_countries]
+AABRTG = JP 日本
+ONSRME = HK 香港
+
+[products]
+113-F61181-003 = {"tariff":"27101941007","description":"113-F61181-003\nLOW SULFUR MARINE RESIDUAL FUELS\nMF-180(0.5%)","approval":"PERMIT0000001-001","permit":"PERMIT0000001","permit_item":"001"}
+113-F51007-000 = {"tariff":"27101939001","description":"113-F51007-000\nMARINE GAS OIL","approval":"PERMIT0000001-001","permit":"PERMIT0000001","permit_item":"001"}
