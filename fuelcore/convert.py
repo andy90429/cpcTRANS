@@ -91,11 +91,11 @@ def insert(db, table, key, values, notes):
                       for column, value in values.items()})
 
 
-def whole_quantity(value, column, notes):
-    # TODO(Q3): Confirm the treatment of fractional tonnes. Section 4 says to take the integer.
-    integer = int(value)
+def package_total(value, notes):
+    # TODO(Q3): 待確認 PKGTOTAL 的小數公噸處理，目前四捨五入至整數。
+    integer = int(rules.rounded(value, 0))
     if integer != value:
-        notes.append(f"{column} 依第 4 節取整數：{value} → {integer}")
+        notes.append(f"PKGTOTAL 四捨五入：{value} → {integer}")
     return integer
 
 
@@ -109,10 +109,10 @@ def header_values(db, h, items, products, settings, notes):
     values = dict(HEADER_FIXED)
     values.update(APLCHECK=h[29], STPLACE=h[4], BYCRTYCODE=country_code, BYCRTYNAME=country_name,
                   SERSDATE=date, CreateDateTime=date, GWEIGHT=h[13], NWEIGHT=h[13], TOT_NETWT=h[13],
-                  PKGTOTAL=whole_quantity(number(h[15]), "PKGTOTAL", notes), OTHER=other,
+                  PKGTOTAL=package_total(number(h[15]), notes), OTHER=other,
                   EDIOTHER=ediother, BANO=rules.voyage(h[21], notes), BACALLNO=h[22],
                   BANAME=ship_name, CUSBOXNO=settings.cusboxno, CUSMANNO=h[0],
-                  BYNAME=buyer_name, BYBAN=buyer_code, FOBPRICE=int(number(h[26])),
+                  BYNAME=buyer_name, BYBAN=buyer_code, FOBPRICE=h[26],
                   TOT_AMOUNT=h[26], TOTALAMT=h[26], TWDPRICE=h[25], TOT_DUTYAMT=h[25],
                   FOREX=rules.rounded(number(h[28]), 3), TAXTOTAL=h[31], ITEMNAME=products[0][0],
                   ITEMCODE=items[0][2], REGISTRYID=h[1][4:10], SHIPPINGID=h[1][-4:],
@@ -152,8 +152,7 @@ def write_details(db, key, h, items, products, notes):
         insert(db, "taxitem", key, dict(ITEM=index, PART=1, TAXCODE="B52", TAXRATE=fee * 100,
                                        TAXRATIO=100, 稅費名稱=TAX_NAME, PORDERFLD=1), notes)
     tonnes = sum(number(item[9]) for item in items)
-    insert(db, "sumexp", key, dict(PART=1, EXPQUAN=whole_quantity(tonnes, "EXPQUAN", notes),
-                                  EXPUNIT="TNE"), notes)
+    insert(db, "sumexp", key, dict(PART=1, EXPQUAN=tonnes, EXPUNIT="TNE"), notes)
     insert(db, "sumstc", key, dict(PART=1, STCQUAN=sum(number(item[11]) for item in items),
                                   STCUNIT="LTR"), notes)
     # TODO(Q2): Keep PAYTYPE at 08 even when an item has STCTYPE 78.
@@ -179,12 +178,13 @@ def write_declaration(db, h, items, settings, notes):
     write_details(db, key, h, items, products, notes)
 
 
-def transact(header, items, settings, notes):
+def transact(header, items, settings, notes, connection):
     for attempt in range(2):
         pending = []
-        with closing(Database(settings)) as db:
+        with closing(Database(settings, connection)) as db:
+            db.begin()
             try:
-                db.begin()
+                db.check_engines()
                 write_declaration(db, header, items, settings, pending)
                 db.commit()
             except BaseException as error:
@@ -198,20 +198,20 @@ def transact(header, items, settings, notes):
         return
 
 
-def convert_file(path, settings):
+def convert_file(path, settings, connection=None):
     result = Result()
     try:
         header, items = read_txt(path)
         result.sersno = header[1]
         if len(result.sersno) != 14:
             raise ValueError("報單號碼必須是 14 碼")
-        transact(header, items, settings, result.notes)
+        transact(header, items, settings, result.notes, connection)
         result.ok = True
     except Exception as error:
         result.message = str(error)
     return result
 
 
-def convert_files(paths, settings):
+def convert_files(paths, settings, connection=None):
     ordered = sorted(map(Path, paths), key=lambda path: (path.name, str(path)))
-    return [convert_file(path, settings) for path in ordered]
+    return [convert_file(path, settings, connection=connection) for path in ordered]

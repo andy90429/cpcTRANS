@@ -21,6 +21,8 @@ settings = Settings.load("fuelcore.ini")
 result = convert_file("sample.txt", settings)
 ```
 
+`convert_file` 和 `convert_files` 也接受 `connection=`，可傳入與 `settings.driver` 相符、沒有進行中交易的資料庫連線。轉檔仍以每張報單為單位提交或回滾，外部連線由呼叫端關閉。舊版 MySQL 的登入及驗證可由呼叫端處理。
+
 ## MySQL 測試庫
 
 把範例設定改為 `driver = mysql`，填入測試主機、帳密和兩個測試資料庫名稱。名稱須以 `test_` 開頭，或以 `_test`／`_test_code` 結尾。請使用只有測試庫權限的帳號。建表工具讀取附帶的外部版 CSV，也接受 `--csv` 指定來源。MySQL 建表工具只輸出 SQL。請在測試伺服器套用 SQL 後再執行轉檔。
@@ -42,7 +44,7 @@ python -m fuelcore.generate $env:FUELCORE_SAMPLES .\generated --seed 55
 
 ## 待確認與資料差異
 
-- Q1–Q5 的 TODO 集中於 `fuelcore/convert.py`。主檔稅則讀 I2，項次讀設定，付款方式固定 08，數量依第 4 節取整數，未列欄位交由資料庫給預設值，報單品名換行讀油品表。
+- Q1–Q5 的 TODO 集中於 `fuelcore/convert.py`。主檔稅則讀 I2，項次讀設定，付款方式固定 08。`PKGTOTAL` 暫採四捨五入至整數，`EXPQUAN` 保留項次公噸加總的小數，`FOBPRICE` 保留 H26 的兩位小數。未列欄位交由資料庫給預設值，報單品名換行讀油品表。
 - CSV 的 FOREX 與 B52_項次稅費 都是 5 位小數。依第 4 節先分別取 3 位與 4 位，再補零到欄位精度。
 - CSV 只有九張報單表的欄位，缺少正式代碼表結構和欄位預設值。工具以第 5 節列出的欄位建立測試代碼表。正式庫欄位預設值需要內部確認。
 - 第 0 節說正式代號及公司名由設定檔提供，第 4.1 節則列出賣方欄位為常數。此版使用第 4.1 節列出的值，正式賣方設定方式待確認。

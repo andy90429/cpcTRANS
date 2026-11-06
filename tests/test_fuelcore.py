@@ -6,12 +6,14 @@ import unittest
 from contextlib import closing
 from decimal import Decimal as D
 from pathlib import Path
+from unittest.mock import Mock
 
 from fuelcore import Settings, convert_file, convert_files
 from fuelcore import rules
 from fuelcore.generate import generate
 from fuelcore.convert import read_txt
-from fuelcore.schema import init_sqlite, statements
+from fuelcore.db import Database
+from fuelcore.schema import CODE_TABLES, init_sqlite, read_schema, statements
 
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "fuelcore.ini.example"
@@ -93,6 +95,22 @@ class RulesTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS `test_codes`.`mybuyer`", sql)
         self.assertIn("`PID` int(11) NOT NULL AUTO_INCREMENT", sql)
         self.assertEqual(sql.count("ENGINE=InnoDB"), 11)
+
+    def test_innodb_error_lists_each_invalid_table(self):
+        settings = Mock(driver="mysql", database="test_declarations", code_database="test_codes")
+        db = Database(settings, connection=Mock())
+        tables = [(settings.database, name) for name in read_schema()]
+        tables.extend((settings.code_database, name) for name in CODE_TABLES)
+        db.select = Mock(return_value=[
+            (schema, name, "MyISAM" if name in ("cusdec", "mybuyer") else "InnoDB")
+            for schema, name in tables if name != "tax"
+        ])
+        with self.assertRaises(ValueError) as caught:
+            db.check_engines()
+        self.assertIn("test_declarations.cusdec (MyISAM)", str(caught.exception))
+        self.assertIn("test_codes.mybuyer (MyISAM)", str(caught.exception))
+        self.assertIn("test_declarations.tax (查無引擎)", str(caught.exception))
+        self.assertNotIn("test_declarations.invitem", str(caught.exception))
 
 
 class DatabaseTest(unittest.TestCase):
@@ -228,15 +246,44 @@ class DatabaseTest(unittest.TestCase):
         result = self.convert(self.sample())
         h = self.query("SELECT * FROM cusdec")[0]
         i = self.query("SELECT * FROM invitem")[0]
-        self.assert_fields(h, {"ITEMCODE": "27101949009", "PKGTOTAL": 33, "FOREX": "31.43800",
-                               "FOBPRICE": D("30000"), "文件名稱": None, "CUSBOXNO": "Z000",
+        self.assert_fields(h, {"ITEMCODE": "27101949009", "PKGTOTAL": 34, "FOREX": "31.43800",
+                               "FOBPRICE": "30000.99", "文件名稱": None, "CUSBOXNO": "Z000",
                                "REGISTRYID": "00A10E", "SHIPPINGID": "0001"})
         self.assert_fields(i, {"稅則編號": "27101941007", "數量": D("33.5"), "STCTYPE": "78",
                                "B52_項次稅費": "4487.54960", "報單品名":
                                "113-F61181-003\nLOW SULFUR MARINE RESIDUAL FUELS\nMF-180(0.5%)"})
         self.assertEqual(self.query("SELECT PAYTYPE FROM sumpay")[0][0], "08")
-        self.assertEqual(D(self.query("SELECT EXPQUAN FROM sumexp")[0][0]), 33)
-        self.assertTrue(any("33.5 → 33" in note for note in result.notes))
+        self.assertEqual(D(self.query("SELECT EXPQUAN FROM sumexp")[0][0]), D("33.5"))
+        self.assertTrue(any("33.5 → 34" in note for note in result.notes))
+
+    def test_half_tonne_keeps_fractions_except_package_total(self):
+        self.convert(self.sample(h13="500", h15="0.5", h17="540", h26="450.25",
+                                 i7="500", i9="0.5", i11="540", i13="450.25"))
+        h = self.query("SELECT PKGTOTAL, FOBPRICE FROM cusdec")[0]
+        self.assert_fields(h, {"PKGTOTAL": 1, "FOBPRICE": "450.25"})
+        self.assertEqual(self.query("SELECT EXPQUAN FROM sumexp")[0][0], "0.50000")
+
+    def test_external_sqlite_connection_is_reused_and_left_open(self):
+        with closing(sqlite3.connect(":memory:")) as db:
+            db.executescript(";\n".join(statements(self.settings)) + ";")
+            self.settings.path = self.folder / "does-not-exist.sqlite3"
+            first = convert_file(self.sample(), self.settings, connection=db)
+            self.assertTrue(first.ok, first.message)
+            batch = convert_files([self.sample("0003"), self.sample("0002"), self.sample()],
+                                  self.settings, connection=db)
+            self.assertEqual([result.ok for result in batch], [False, True, True])
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM cusdec").fetchone(), (3,))
+            self.assertFalse(db.in_transaction)
+            self.assertFalse(self.settings.path.exists())
+
+    def test_external_sqlite_transaction_is_left_intact(self):
+        with closing(sqlite3.connect(str(self.settings.path))) as db:
+            db.execute("INSERT INTO mybuyer (BY002) VALUES (?)", ("pending",))
+            result = convert_file(self.sample(), self.settings, connection=db)
+            self.assertFalse(result.ok)
+            self.assertIn("已有進行中的交易", result.message)
+            self.assertTrue(db.in_transaction)
+            self.assertEqual(db.execute("SELECT BY002 FROM mybuyer").fetchone(), ("pending",))
 
     def sample_paths(self):
         folder = os.environ.get("FUELCORE_SAMPLES")
@@ -275,8 +322,9 @@ class DatabaseTest(unittest.TestCase):
                                        ("TOTALAMT", "小計金額"), ("TWDPRICE", "DUTYAMT"),
                                        ("TOT_DUTYAMT", "DUTYAMT")):
                     self.assertEqual(D(header[column]), sum(D(row[source]) for row in item_rows), column)
-                tonnes = int(sum(D(row["數量"]) for row in item_rows))
-                self.assertEqual(header["PKGTOTAL"], tonnes)
+                tonnes = sum(D(item[9]) for item in items)
+                self.assert_fields(header, {"PKGTOTAL": rules.rounded(D(h[15]), 0),
+                                            "FOBPRICE": D(h[26])})
                 self.assert_fields(rows("sumexp")[0], {"MSGCODE": "5203S", "PART": 1, "EXPUNIT": "TNE",
                                                       "EXPQUAN": tonnes})
                 self.assert_fields(rows("sumstc")[0], {"MSGCODE": "5203S", "PART": 1, "STCUNIT": "LTR",
