@@ -2,5 +2,6 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+.venv_build/
 fuelcore.ini
 *.sqlite3

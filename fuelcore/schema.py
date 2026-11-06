@@ -5,7 +5,8 @@ from collections import defaultdict
 from contextlib import closing
 from pathlib import Path
 
-SCHEMA = Path(__file__).with_name("schema.csv")
+# PyInstaller places the bundled CSV beside this module under its runtime directory.
+SCHEMA = Path(__file__).resolve().with_name("schema.csv")
 CODE_TABLES = {
     "mybuyer": "BY002 varchar(10) PRIMARY KEY, BY003 varchar(200), "
                "BY012 varchar(2), BY013 varchar(50), BY015 varchar(6), "

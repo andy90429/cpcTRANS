@@ -1,14 +1,16 @@
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import Settings, convert_files
-from .schema import SCHEMA, init_sqlite, statements
+from fuelcore import Settings, convert_files
+from fuelcore.schema import SCHEMA, init_sqlite, statements
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="python -m fuelcore")
+    prog = "fuelcore.exe" if getattr(sys, "frozen", False) else "python -m fuelcore"
+    parser = argparse.ArgumentParser(prog=prog)
     commands = parser.add_subparsers(dest="command", required=True)
     convert = commands.add_parser("convert")
     convert.add_argument("txt", nargs="+", type=Path)

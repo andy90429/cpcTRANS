@@ -23,6 +23,27 @@ result = convert_file("sample.txt", settings)
 
 `convert_file` 和 `convert_files` 也接受 `connection=`，可傳入與 `settings.driver` 相符、沒有進行中交易的資料庫連線。轉檔仍以每張報單為單位提交或回滾，外部連線由呼叫端關閉。舊版 MySQL 的登入及驗證可由呼叫端處理。
 
+## 打包
+
+在 Windows 安裝 **64 位元 Python 3.11 以上**，從專案根目錄依序執行：
+
+```bat
+build_exe.bat
+build_check.bat
+```
+
+`build_exe.bat` 在專案內建立或沿用 `.venv_build`，安裝打包套件，產生 `dist\fuelcore\fuelcore.exe` 和 `dist\fuelcore.zip`。如果 Python 不在 PATH，可以先將 `FUELCORE_BUILD_PYTHON` 設為 Python 執行檔的完整路徑。
+
+`build_check.bat` 將 ZIP 解到新的暫存資料夾，從範例建立設定，用 EXE 建立 SQLite 測試庫並轉換 `資料\txt樣本` 內的所有 TXT，最後列出成功及失敗數。樣本在專案外時，可以執行 `build_check.bat "C:\路徑\txt樣本"`。
+
+在沒有安裝 Python 的 Windows 上試跑時，請完整解壓縮 ZIP，保留 `fuelcore.exe` 旁的 `_internal` 目錄。在解壓後的 `fuelcore` 資料夾執行：
+
+```bat
+copy fuelcore.ini.example fuelcore.ini
+fuelcore.exe schema --config fuelcore.ini
+fuelcore.exe convert "C:\路徑\D4122_TEST_0001.txt" --config fuelcore.ini
+```
+
 ## MySQL 測試庫
 
 把範例設定改為 `driver = mysql`，填入測試主機、帳密和兩個測試資料庫名稱。名稱須以 `test_` 開頭，或以 `_test`／`_test_code` 結尾。請使用只有測試庫權限的帳號。建表工具讀取附帶的外部版 CSV，也接受 `--csv` 指定來源。MySQL 建表工具只輸出 SQL。請在測試伺服器套用 SQL 後再執行轉檔。
