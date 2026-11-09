@@ -2,7 +2,8 @@
 
 import re
 from io import BytesIO
-from unicodedata import east_asian_width
+from decimal import Decimal
+from zipfile import ZipFile
 
 from .calc import BARREL_KL, FEE_RATE
 from .editing import new_copy
@@ -43,11 +44,7 @@ def format_release(release):
     return release.strip() or "      年    月    日"
 
 
-def excel_sum(refs):
-    return "SUM(" + ",".join(refs) + ")"
-
-
-def workbook(trial, after, number, release):
+def workbook(trial, after, number, release, *, cached_values=None):
     from openpyxl import Workbook
     from openpyxl.cell.rich_text import CellRichText, TextBlock
     from openpyxl.cell.text import InlineFont
@@ -56,7 +53,7 @@ def workbook(trial, after, number, release):
 
     book = Workbook()
     sheet = book.active
-    sheet.title = TITLE
+    sheet.title = "修改報表"
     sheet.sheet_view.showGridLines = False
     sheet.sheet_format.defaultRowHeight = 12.75
     book.calculation.fullCalcOnLoad = True
@@ -72,12 +69,12 @@ def workbook(trial, after, number, release):
         merged(*args)
     regular = InlineFont(rFont="標楷體", sz=10, family=4, charset=136)
     underlined = InlineFont(rFont="標楷體", sz=10, family=4, charset=136, u="single")
-    runs = [TextBlock(regular, "     報單號碼  ")]
-    if number.upper().startswith("DA"):
-        runs.append(TextBlock(underlined, number[:2]))
-        number = number[2:]
-    runs.append(TextBlock(regular, number))
-    merged(4, CellRichText(runs), 12.95, "標楷體", 10, "left")
+    parts = number.split("/")
+    if len(parts) >= 5:
+        number = " / ".join(part.strip() for part in parts[:5])
+    sheet["A4"] = CellRichText([TextBlock(regular, "     報單號碼  "), TextBlock(underlined, number)])
+    sheet["A4"].alignment = Alignment(horizontal="left", vertical="top")
+    sheet.row_dimensions[4].height = 12.95
     merged(5, f"     於{format_release(release)}放行，其中電腦資料傳輸錯誤，申請更正下列事項:",
            12.95, "標楷體", 10, "left")
     thin = Side(style="thin", color="000000")
@@ -97,18 +94,28 @@ def workbook(trial, after, number, release):
     total_net, total_qty, total_stat = range(11 + 3 * count, 14 + 3 * count)
     twd_rows = list(range(total_stat + 1, total_stat + 1 + count))
     total_twd, packages, gross, blank, fee, fee_sum = range(twd_rows[-1] + 1, twd_rows[-1] + 7)
-    qty_decimals = 3 if any(row.quantity != round(row.quantity, 2) for result in results for row in result.rows) else 2
-    unit = trial.items[0].unit
-    stat_unit = trial.items[0].stat_unit
-    fmt_qty = '"    "#,##0.' + ("0" * qty_decimals) + f'_)"{unit}"'
-    fmt_usd, fmt_twd = '"USD "#,##0.00_)', '"TWD "#,##0_)'
-    fmt_net, fmt_stat = '#,##0.00_)"KGM"', f'#,##0.00_)"{stat_unit}"'
+    quantities = [value for result in results for value in (result.quantity, *(r.quantity for r in result.rows))]
+    qty_decimals = 3 if any(abs(round(q * 100) - q * 100) > Decimal("1e-6") for q in quantities) else 2
+    places = "0" * qty_decimals
+    fmt_qty = rf'"    "#,##0.{places}_)"TNE";"    "\(#,##0.{places}\)"TNE"'
+    fmt_usd = r'"USD "#,##0.00_);\("USD "#,##0.00\)'
+    fmt_twd = r'"TWD "#,##0_);\("TWD "#,##0\)'
+    fmt_net = r'#,##0.00_)"KGM";\(#,##0.00\)"KGM"'
+    fmt_stat = r'#,##0.00_)"LTR";\(#,##0.00\)"LTR"'
     numeric = Font(name="標楷體", size=12, family=4, charset=136)
-    widths = [21.5, 37.5, 41.5]
+    totals = ("usd", "twd", "net", "quantity", "liters", "packages", "gross", "fee")
+    item_fields = ("net", "quantity", "liters", "twd")
+
+    def same(a, b):
+        return abs(a - b) < Decimal("1e-9")
+
+    changed = (any(not same(getattr(before, k), getattr(after, k)) for k in totals)
+               or any(not same(getattr(a, k), getattr(b, k))
+                      for a, b in zip(before.rows, after.rows) for k in item_fields))
 
     def line(row, label, values, cells, fmt="General"):
         sheet.row_dimensions[row].height = 16.5
-        sheet.row_dimensions[row].hidden = values[0] == values[1]
+        sheet.row_dimensions[row].hidden = changed and same(*values)
         for col, value in enumerate((label, *cells), 1):
             cell = sheet.cell(row, col, value)
             cell.font = numeric
@@ -117,72 +124,66 @@ def workbook(trial, after, number, release):
             cell.border = Border(left=thin, right=thin, top=thin, bottom=thin if row == fee_sum else None)
             if col != 1:
                 cell.number_format = fmt
-            display = str(label or "") if col == 1 else f"{values[col - 2]:,f}".rstrip("0").rstrip(".")
-            length = sum(2 if east_asian_width(char) in "FW" else 1 for char in display)
-            widths[col - 1] = max(widths[col - 1], length + (12 if col != 1 else 3))
+            if cached_values is not None and cell.data_type == "f":
+                cached_values[cell.coordinate] = values[col - 2]
 
     def total(row, label, attr, forms, fmt):
         line(row, label, [getattr(result, attr) for result in results], ["=" + form for form in forms], fmt)
 
-    sheet["E8"] = "試算參數（列印範圍外）"
-    sheet["E9"] = "匯率"
-    sheet["F9"] = trial.exchange
-    sheet["E10"] = "商港服務費差數"
-    sheet["F10"] = trial.fee_offset
-    sheet["E11"], sheet["F11"], sheet["G11"] = "項次", "更正前單價", "更正後單價"
-    for index, item in enumerate(trial.items):
-        row = 12 + index
-        sheet.cell(row, 5, item.number)
-        sheet.cell(row, 6, before.rows[index].price)
-        sheet.cell(row, 7, after.rows[index].price)
+    def item_value(col, result, index):
+        return f"{col}{qty_rows[index]}*{result.rows[index].price}"
 
-    def usd_row(col, index):
-        price_col = "F" if col == "B" else "G"
-        return f"ROUND({col}{qty_rows[index]}*${price_col}${12 + index},2)"
+    def item_label(group, index):
+        match = re.match(r"[+-]?\d+", str(trial.items[index].number).strip())
+        number = int(match[0]) if match else index + 1
+        label = f"{group}.{number}"
+        return float(label) if 0 <= number < 10 else label
 
-    total(9, 16, "usd", [excel_sum(usd_row(col, index) for index in range(count)) for col in "BC"], fmt_usd)
+    usd = ["ROUND(" + "+".join(item_value(col, result, index) for index in range(count)) + ",2)"
+           for col, result in zip("BC", results)]
+    total(9, 16, "usd", usd, fmt_usd)
     total(10, 21, "twd", [f"{col}{total_twd}" for col in "BC"], fmt_twd)
-    for index, item in enumerate(trial.items):
+    for index in range(count):
         pair = [result.rows[index] for result in results]
         qty_refs = [f"{col}{qty_rows[index]}" for col in "BC"]
-        line(qty_rows[index], f"38.{item.number}", [row.quantity for row in pair],
+        line(qty_rows[index], item_label(38, index), [row.quantity for row in pair],
              [row.quantity for row in pair], fmt_qty)
-        line(net_rows[index], f"37.{item.number}", [row.net for row in pair],
+        line(net_rows[index], item_label(37, index), [row.net for row in pair],
              [f"=ROUND({ref}*{row.net_ratio},2)" for ref, row in zip(qty_refs, pair)], fmt_net)
         formulas = [
-            f"=ROUND({ref}/{row.factor}*{BARREL_KL},3)*1000" if row.factor else
+            f"=ROUND({ref}/{row.factor}*{BARREL_KL}*1000,0)" if row.factor else
             f"=ROUND({ref}*{row.stat_ratio},{row.stat_places})" for ref, row in zip(qty_refs, pair)
         ]
-        line(stat_rows[index], f"39.{item.number}", [row.liters for row in pair], formulas, fmt_stat)
-        prices = (f"$F${12 + index}", f"$G${12 + index}")
-        formulas = [
-            f"=IF(AND({ref}={item.quantity},{price}={item.price}),{item.twd},ROUND({usd_row(col, index)}*$F$9,0))"
-            for col, ref, price in zip("BC", qty_refs, prices)
-        ]
-        line(twd_rows[index], f"40.{item.number}", [row.twd for row in pair], formulas, fmt_twd)
+        line(stat_rows[index], item_label(39, index), [row.liters for row in pair], formulas, fmt_stat)
+        formulas = [f"=ROUND({item_value(col, result, index)}*{result.exchange},0)"
+                    for col, result in zip("BC", results)]
+        line(twd_rows[index], item_label(40, index), [row.twd for row in pair], formulas, fmt_twd)
 
-    def summed(row, label, key, refs, fmt, rounding=False):
-        forms = [excel_sum(f"{col}{ref}" for ref in refs) for col in "BC"]
-        total(row, label, key, [f"ROUND({form},2)" for form in forms] if rounding else forms, fmt)
+    def summed(row, label, key, refs, fmt):
+        total(row, label, key, ["+".join(f"{col}{ref}" for ref in refs) for col in "BC"], fmt)
 
     summed(total_net, "TOTAL", "net", net_rows, fmt_net)
-    summed(total_qty, None, "quantity", qty_rows, fmt_qty, True)
-    summed(total_stat, None, "liters", stat_rows, fmt_stat, True)
+    summed(total_qty, None, "quantity", qty_rows, fmt_qty)
+    summed(total_stat, None, "liters", stat_rows, fmt_stat)
     summed(total_twd, "TOTAL", "twd", twd_rows, fmt_twd)
-    total(packages, 42, "packages", [f"ROUNDDOWN({col}{total_qty}*{trial.package_ratio},0)" for col in "BC"], '#,##0_)"TNE"')
-    total(gross, 44, "gross", [f"ROUND({col}{total_net}*{trial.gross_ratio},2)" for col in "BC"], '#,##0.00_)"公斤"')
+    package_scale = "" if trial.package_ratio == 1 else f"*{trial.package_ratio}"
+    total(packages, 42, "packages",
+          [f"ROUNDDOWN({col}{total_qty}{package_scale},0)" for col in "BC"], r'#,##0_)"TNE";\(#,##0\)"TNE"')
+    total(gross, 44, "gross",
+          [f"{col}{total_net}" if trial.gross_ratio == 1 else f"ROUND({col}{total_net}*{trial.gross_ratio},2)"
+           for col in "BC"], r'#,##0.00_)"公斤";\(#,##0.00\)"公斤"')
     line(blank, None, [before.fee, after.fee], [None, None])
-    total(fee, "推廣貿易服務費", "fee",
-          [f"MAX(0,ROUNDDOWN({FEE_RATE}*{col}{total_twd},0)-$F$10)" for col in "BC"], "#,##0")
+    fee_formulas = [f"ROUNDDOWN({FEE_RATE}*{col}10,0)" for col in "BC"]
+    if trial.fee_offset:
+        fee_formulas = [f"MAX(0,{formula}-({trial.fee_offset}))" for formula in fee_formulas]
+    total(fee, "推廣貿易服務費", "fee", fee_formulas, "#,##0")
     total(fee_sum, "合計", "fee", [f"{col}{fee}" for col in "BC"], "#,##0")
     for offset, value, height, family, alignment in FOOTER:
         merged(fee_sum + offset, value, height, family, 10, alignment,
                underline="single" if offset == 9 else None)
-    for col, width in zip("ABC", widths):
+    for col, width in zip("ABC", (21.5, 37.5, 41.5)):
         sheet.column_dimensions[col].width = width
         sheet.column_dimensions[col].bestFit = True
-    for col, width in zip("EFG", (28, 17, 17)):
-        sheet.column_dimensions[col].width = width
     sheet.print_area = f"A1:C{fee_sum + 13}"
     sheet.print_options.horizontalCentered = True
     sheet.print_options.verticalCentered = True
@@ -194,10 +195,30 @@ def workbook(trial, after, number, release):
     return book
 
 
-def export_correction(report, index, inputs, folder):
-    trial = report.trial(index)
-    number = report.batch.ids[index]
-    book = workbook(trial, trial.calculate(inputs), number, report.release(index))
+def correction_bytes(trial, after, number, release):
+    cached_values = {}
+    book = workbook(trial, after, number, release, cached_values=cached_values)
+    raw = BytesIO()
+    book.save(raw)
+    raw.seek(0)
     output = BytesIO()
-    book.save(output)
-    return new_copy(folder, f"{number}_更正申請書", ".xlsx", output.getvalue(), report.batch.assets)
+    # Keep the filed/current display values alongside the recalculable Excel formulas.
+    formula_cell = re.compile(rb'(<c r="([A-Z]+\d+)"[^>]*><f>[^<]*</f><v>)(</v>)')
+    with ZipFile(raw) as source, ZipFile(output, "w") as target:
+        for entry in source.infolist():
+            data = source.read(entry)
+            if entry.filename == "xl/worksheets/sheet1.xml":
+                def cache(match):
+                    value = cached_values[match[2].decode()]
+                    return match[1] + format(value, "f").encode() + match[3]
+
+                data = formula_cell.sub(cache, data)
+            target.writestr(entry, data)
+    return output.getvalue()
+
+
+def export_correction(report, index, inputs, folder, *, exchange=None):
+    trial, after = report.correction_values(index, inputs, exchange)
+    number = report.batch.ids[index]
+    content = correction_bytes(trial, after, report.number_caption(index) or number, report.release(index))
+    return new_copy(folder, f"{number}_更正申請書", ".xlsx", content, report.batch.assets)

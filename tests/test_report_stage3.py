@@ -6,17 +6,20 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from copy import deepcopy
 from decimal import Decimal as D, ROUND_DOWN, ROUND_HALF_UP
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
 
+from fuelcore.report import ReportBatch
 from fuelcore.report.calc import ItemInput, OriginalItem, Trial
 from fuelcore.report.editing import EditableReport, TrialFields, report_ids
+from fuelcore.report.rpx import RpxDocument
 
 from test_edi import load_fixture_tables, settings
 from test_printing import FakePrinter
-from test_report import PDF_AVAILABLE, REPORTS
+from test_report import PDF_AVAILABLE, REPORTS, component
 
 
 def sample_trial():
@@ -31,6 +34,34 @@ def changed_first(trial, quantity, price="902.70", density=None):
 
 
 class TrialTest(unittest.TestCase):
+    def test_correction_uses_original_and_current_report_captions(self):
+        page = component("TGPage", "Front", 0, 0, 400, 600)
+        fields = [
+            ("FOREX", "32.215", 10), ("項次號碼", "1", 20), ("數量", "20", 21),
+            ("UNITAMT", "902.70", 22), ("報單淨重", "20000", 23), ("DUTYAMT", "581609", 24),
+            ("數量單位", "TNE", 25), ("統計數量", "(21757", 26), ("統計單位", "LTR", 27),
+            ("TOT_NETWT", "20000", 40), ("TWDPRICE", "581610", 41),
+        ]
+        page.children = [component("TGTxt", f"Field{top}", 0, top, 100, 12,
+                                   PrtConditions=key, Caption=value) for key, value, top in fields]
+        document = RpxDocument.create("測試", [page])
+        report = EditableReport(ReportBatch(["TEST00A10E0777"], None, None, [], [page], []),
+                                document, deepcopy([page]), {})
+        TrialFields(page).apply(report.trial(0).calculate(report.inputs(0), exchange=D("30")))
+        trial, current = report.correction_values(0, None, None)
+        self.assertEqual(trial.calculate().twd, 581610)
+        self.assertEqual(trial.calculate().rows[0].twd, 581609)
+        self.assertEqual(current.exchange, 30)
+        self.assertEqual(current.rows[0].twd, 541620)
+
+    def test_exchange_change_recomputes_all_items_but_keeps_filed_values(self):
+        trial = sample_trial()
+        result = trial.calculate(trial.inputs(), exchange=D("30"))
+        self.assertEqual(result.exchange, D("30"))
+        self.assertEqual([row.twd for row in result.rows], [541620, 984150, 1624860])
+        self.assertEqual(trial.calculate().rows[0].twd, 581609)
+        self.assertEqual(trial.calculate().exchange, D("32.215"))
+
     def test_original_and_legacy_modified_cases(self):
         trial = sample_trial()
         original = trial.calculate()
@@ -92,21 +123,25 @@ class CorrectionTest(unittest.TestCase):
     def test_excel_styles_formulas_and_recalculation(self):
         from io import BytesIO
         from openpyxl import load_workbook
-        from fuelcore.report.correction import workbook
+        from fuelcore.report.correction import correction_bytes
 
         trial = sample_trial()
         result = trial.calculate(changed_first(trial, "21"))
-        content = BytesIO()
-        workbook(trial, result, "DAG515A10E0777", "115/10/23").save(content)
-        sheet = load_workbook(content, rich_text=True).active
-        self.assertEqual(str(sheet["A4"].value), "     報單號碼  DAG515A10E0777")
+        content = correction_bytes(trial, result, "DA/G5/15/A10/E0777", "115/10/23")
+        sheet = load_workbook(BytesIO(content), rich_text=True).active
+        stored = load_workbook(BytesIO(content), data_only=True).active
+        self.assertEqual(str(sheet["A4"].value), "     報單號碼  DA / G5 / 15 / A10 / E0777")
         self.assertEqual([(part.text, part.font.u) for part in sheet["A4"].value][1:],
-                         [("DA", "single"), ("G515A10E0777", None)])
-        self.assertIn("A4:C4", sheet.merged_cells)
+                         [("DA / G5 / 15 / A10 / E0777", "single")])
+        self.assertNotIn("A4:C4", sheet.merged_cells)
+        self.assertEqual(sheet.title, "修改報表")
+        self.assertEqual([sheet.column_dimensions[c].width for c in "ABC"], [21.5, 37.5, 41.5])
+        self.assertEqual(sheet["A12"].value, 38.1)
         self.assertIn("115年10月23日", sheet["A5"].value)
         self.assertEqual(sheet["B8"].border.bottom.style, "thin")
         self.assertEqual(sheet["B8"].alignment.horizontal, "center")
         self.assertTrue(sheet.print_options.horizontalCentered)
+        self.assertTrue(sheet.print_options.verticalCentered)
         self.assertTrue(sheet.sheet_properties.pageSetUpPr.fitToPage)
         self.assertTrue(sheet.row_dimensions[15].hidden)
         self.assertTrue(sheet.row_dimensions[16].hidden)
@@ -115,11 +150,26 @@ class CorrectionTest(unittest.TestCase):
         for col, expected in (("B", trial.calculate()), ("C", result)):
             for row, name in ((9, "usd"), (10, "twd"), (20, "net"), (21, "quantity"),
                               (22, "liters"), (27, "packages"), (28, "gross"), (30, "fee")):
-                self.assertEqual(evaluate_cell(sheet, f"{col}{row}"), getattr(expected, name))
+                self.assertEqual(D(str(stored[f"{col}{row}"].value)), getattr(expected, name))
+        self.assertEqual(evaluate_cell(sheet, "B10"), 3383252)
+        self.assertEqual(evaluate_cell(sheet, "C10"), result.twd)
         sheet["C12"] = D("18.125")
         updated = trial.calculate(changed_first(trial, "18.125"))
         self.assertEqual(evaluate_cell(sheet, "C30"), updated.fee)
         self.assertEqual(evaluate_cell(sheet, "C13"), updated.rows[0].liters)
+
+    def test_unchanged_form_shows_all_rows_and_distinct_rates_are_used(self):
+        from fuelcore.report.correction import workbook
+
+        trial = sample_trial()
+        before = trial.calculate()
+        unchanged = workbook(trial, before, "TEST00A10E0777", "").active
+        self.assertFalse(any(unchanged.row_dimensions[row].hidden for row in range(9, 32)))
+        after = trial.calculate(changed_first(trial, "18.125"), exchange=D("30"))
+        changed = workbook(trial, after, "TEST00A10E0777", "").active
+        self.assertIn("32.215", changed["B23"].value)
+        self.assertIn("*30", changed["C23"].value)
+        self.assertIn("#,##0.000", changed["C12"].number_format)
 
 
 @unittest.skipUnless(os.environ.get("FUELCORE_CBS_REPORTS") and PDF_AVAILABLE, "請設定本機報表與 report extras")

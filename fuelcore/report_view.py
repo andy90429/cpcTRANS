@@ -183,12 +183,13 @@ class ReportPage:
     def export_excel(self):
         try:
             report, index = self.active_report()
-            self.save_excel(report, index, report.inputs(index))
+            self.save_excel(report, index)
         except RpxError as error:
             self.show_error(error)
 
-    def save_excel(self, report, index, inputs):
-        self.task("產生更正申請書…", lambda: export_correction(report, index, inputs, self.output), self.saved)
+    def save_excel(self, report, index, inputs=None, *, exchange=None):
+        self.task("產生更正申請書…", lambda: export_correction(report, index, inputs, self.output,
+                                                               exchange=exchange), self.saved)
 
     def change(self, index, operation):
         def work():
@@ -298,7 +299,13 @@ class TrialDialog:
                 ttk.Label(grid, textvariable=var, width=13, anchor="e").grid(row=row, column=col, padx=3)
         ttk.Label(self.window, textvariable=self.total, wraplength=width - 40).grid(sticky="w", padx=14, pady=5)
         release = report.release(index) or "報單未載"
-        ttk.Label(self.window, text=f"匯率 {self.trial.exchange}　放行日期 {release}").grid(sticky="w", padx=14)
+        details = ttk.Frame(self.window)
+        details.grid(sticky="w", padx=14)
+        self.exchange = tk.StringVar(value=str(report.exchange(index)))
+        self.exchange.trace_add("write", self.update)
+        ttk.Label(details, text="匯率").pack(side="left")
+        ttk.Entry(details, width=11, textvariable=self.exchange).pack(side="left", padx=5)
+        ttk.Label(details, text=f"放行日期 {release}").pack(side="left")
         ttk.Label(self.window, textvariable=self.notice, wraplength=760).grid(sticky="w", padx=14, pady=4)
         bar = ttk.Frame(self.window, padding=(14, 6))
         bar.grid(sticky="ew")
@@ -316,7 +323,7 @@ class TrialDialog:
 
     def update(self, *_):
         try:
-            result = self.trial.calculate(self.inputs())
+            result = self.trial.calculate(self.inputs(), exchange=decimal_input(self.exchange.get()))
         except RpxError as error:
             self.total.set("")
             self.notice.set(str(error))
@@ -340,11 +347,13 @@ class TrialDialog:
         if self.view.workbench.busy:
             return
         inputs = self.inputs()
-        self.view.change(self.index, lambda: self.report.apply(self.index, inputs, self.view.output))
+        exchange = decimal_input(self.exchange.get())
+        self.view.change(self.index, lambda: self.report.apply(self.index, inputs, self.view.output,
+                                                              exchange=exchange))
         self.window.destroy()
 
     def export(self):
         if self.view.workbench.busy:
             return
-        self.view.save_excel(self.report, self.index, self.inputs())
+        self.view.save_excel(self.report, self.index, self.inputs(), exchange=decimal_input(self.exchange.get()))
         self.window.destroy()

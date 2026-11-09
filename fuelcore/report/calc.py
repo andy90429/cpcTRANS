@@ -1,6 +1,6 @@
 """Recalculate a declaration using the quantities on its original front page."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 
 from .rpx import RpxError
@@ -103,6 +103,7 @@ class Calculation:
     packages: Decimal
     fee: Decimal
     tax_total: Decimal
+    exchange: Decimal
 
 
 @dataclass(frozen=True)
@@ -114,37 +115,47 @@ class Trial:
     fee_offset: Decimal
     other_tax: Decimal
     apis: tuple
+    filed_totals: dict
 
     @classmethod
-    def from_original(cls, items, exchange, gross, packages, fee, tax_total):
+    def from_original(cls, items, exchange, gross, packages, fee, tax_total, *, filed_totals=None):
         if not items:
             raise RpxError("報單沒有可試算的項次")
         quantity = sum(item.quantity for item in items)
         net = sum(item.net for item in items)
         twd = sum(item.twd for item in items)
         apis = tuple(derive_api(item.quantity, item.liters) if uses_table(item) else None for item in items)
+        totals = dict(filed_totals or {})
+        totals.update(gross=gross, packages=packages, fee=fee, tax_total=tax_total)
         return cls(tuple(items), exchange, gross / net if net else ZERO,
                    (Decimal(1) if packages == down(quantity) else packages / quantity) if quantity else ZERO,
-                   down(twd * FEE_RATE) - fee, tax_total - fee, apis)
+                   down(twd * FEE_RATE) - fee, tax_total - fee, apis, totals)
 
     def inputs(self):
         return tuple(ItemInput(item.quantity, item.price) for item in self.items)
 
-    def calculate(self, inputs=None):
+    def calculate(self, inputs=None, *, exchange=None):
+        original = inputs is None and exchange is None
+        exchange = self.exchange if exchange is None else decimal_input(exchange)
         inputs = self.inputs() if inputs is None else tuple(inputs)
         if len(inputs) != len(self.items):
             raise RpxError("試算輸入的項次數量與原報單不同")
-        rows = tuple(self.calculate_item(item, entry, api) for item, entry, api in zip(self.items, inputs, self.apis))
+        rows = tuple(self.calculate_item(item, entry, api, exchange)
+                     for item, entry, api in zip(self.items, inputs, self.apis))
+        if original:
+            rows = tuple(replace(row, net=item.net, twd=item.twd, liters=item.liters)
+                         for row, item in zip(rows, self.items))
         quantity = rounded(sum(row.quantity for row in rows), 2)
         usd = sum(row.usd for row in rows)
         twd = sum(row.twd for row in rows)
         net = sum(row.net for row in rows)
         liters = rounded(sum(row.liters for row in rows), 2)
         fee = max(ZERO, down(twd * FEE_RATE) - self.fee_offset)
-        return Calculation(rows, quantity, usd, twd, net, liters, rounded(net * self.gross_ratio, 2),
-                           down(quantity * self.package_ratio), fee, self.other_tax + fee)
+        result = Calculation(rows, quantity, usd, twd, net, liters, rounded(net * self.gross_ratio, 2),
+                             down(quantity * self.package_ratio), fee, self.other_tax + fee, exchange)
+        return replace(result, **self.filed_totals) if original else result
 
-    def calculate_item(self, item, entry, api):
+    def calculate_item(self, item, entry, api, exchange):
         quantity, price = decimal_input(entry.quantity), decimal_input(entry.price)
         net_ratio = item.net / item.quantity if item.quantity else ZERO
         stat_ratio = item.liters / item.quantity if item.quantity else ZERO
@@ -157,11 +168,10 @@ class Trial:
         factor = table_factor(api) if api is not None else None
         liters = ton_to_liters(quantity, factor) if factor else rounded(quantity * stat_ratio, stat_places)
         usd = rounded(quantity * price, 2)
-        # An unchanged item keeps the filed TWD value, which can differ from re-rounding.
-        twd = item.twd if (quantity, price) == (item.quantity, item.price) else rounded(usd * self.exchange)
+        twd = rounded(usd * exchange)
         return ItemResult(quantity, price, usd, twd, rounded(quantity * net_ratio, 2),
                           liters, net_ratio, stat_ratio, stat_places, factor, api, table and factor is None)
 
 
 def uses_table(item):
-    return item.unit == "TNE" and item.stat_unit == "LTR" and item.quantity > 0
+    return item.unit == "TNE" and "LTR" in item.stat_unit and item.quantity > 0

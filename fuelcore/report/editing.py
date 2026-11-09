@@ -3,7 +3,7 @@
 import re
 from contextlib import closing
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -91,8 +91,20 @@ class TrialFields:
             raise RpxError("試算需要各項次使用相同的數量與統計單位")
         values = self.totals
         fee = number(values["fee"])
+        totals = {key: number(values[key]) for key in ("usd", "twd", "net", "quantity", "liters")
+                  if values[key] is not None}
         return Trial.from_original(items, number(values["exchange"], required=True), number(values["gross"]),
-                                   number(values["packages"]), fee, number(values["tax_total"]) if values["tax_total"] else fee)
+                                   number(values["packages"]), fee, number(values["tax_total"]) if values["tax_total"] else fee,
+                                   filed_totals=totals)
+
+    def snapshot(self, result):
+        rows = tuple(replace(row, **{key: number(fields[key])
+                                     for key in ("net", "liters", "twd") if fields[key] is not None})
+                     for (_, fields), row in zip(self.items, result.rows))
+        totals = {key: number(self.totals[key]) for key in
+                  ("usd", "twd", "net", "quantity", "liters", "gross", "packages", "fee", "tax_total")
+                  if self.totals[key] is not None}
+        return replace(result, rows=rows, **totals)
 
     def inputs(self, densities=()):
         return tuple(ItemInput(number(fields["quantity"], required=True), number(fields["price"], required=True),
@@ -100,6 +112,7 @@ class TrialFields:
                      for index, (_, fields) in enumerate(self.items))
 
     def apply(self, result):
+        show_number(self.totals["exchange"], result.exchange)
         for (_, fields), row in zip(self.items, result.rows):
             for key in ("quantity", "price", "net"):
                 show_number(fields[key], getattr(row, key))
@@ -179,8 +192,22 @@ class EditableReport:
     def inputs(self, index):
         return TrialFields(self.batch.fronts[index]).inputs(self.densities.get(index, ()))
 
+    def exchange(self, index):
+        return number(TrialFields(self.batch.fronts[index]).totals["exchange"], required=True)
+
+    def correction_values(self, index, inputs, exchange):
+        trial = self.trial(index)
+        if inputs is not None:
+            return trial, trial.calculate(inputs, exchange=exchange)
+        fields = TrialFields(self.batch.fronts[index])
+        current = trial.calculate(self.inputs(index), exchange=self.exchange(index))
+        return trial, fields.snapshot(current)
+
     def release(self, index):
         return caption(find_field(self.batch.fronts[index].children, TOTAL_FIELDS["release"]))
+
+    def number_caption(self, index):
+        return caption(find_field(self.batch.fronts[index].children, TOTAL_FIELDS["id"]))
 
     def fields(self, index):
         return [(position, field.name, caption(field)) for position, field in enumerate(self.batch.fronts[index].children)
@@ -193,8 +220,8 @@ class EditableReport:
         copy.batch.fronts[index].children[field_index].set_text("Caption", value)
         return copy, copy.save(folder, index)
 
-    def apply(self, index, inputs, folder):
-        result = self.trial(index).calculate(inputs)
+    def apply(self, index, inputs, folder, *, exchange=None):
+        result = self.trial(index).calculate(inputs, exchange=exchange)
         copy = deepcopy(self)
         TrialFields(copy.batch.fronts[index]).apply(result)
         copy.densities[index] = tuple(entry.density for entry in inputs)
