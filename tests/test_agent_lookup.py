@@ -1,90 +1,141 @@
 import ast
+import io
 import json
 import os
 import tempfile
+import time
 import unittest
-from dataclasses import asdict, replace
-from datetime import datetime, timedelta, timezone
+from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+from urllib.request import HTTPSHandler
 
 from fuelcore import agent_lookup as agents
 
 
-HTML = Path(__file__).with_name("fixtures") / "agent_sdci.html"
-SHIPS = [
-    agents.ShipAgent("TEST SHIP 1", "TEST01", "9000001", "測試船務代理股份有限公司", "", "", "tpnet2", "測試一號"),
-    agents.ShipAgent("TEST SHIP 2", "TEST02", "9000002", "示範海運股份有限公司", "", "", "tpnet2"),
-    agents.ShipAgent("TEST SHIP 3", "TEST03", "9000003", "範例船務代理股份有限公司", "", "", "sdci"),
-]
+PORT = ('<input type="hidden" name="__RequestVerificationToken" value="fake">'
+        '<select name="port"><option value="TXG" selected></option></select>')
 
 
-class SourceTest(unittest.TestCase):
-    def test_request_retries_timeout_with_same_request(self):
+def movement(name="測試一號\tTEST SHIP 1", **overrides):
+    row = dict(visaNo="<a>ATXG000000001</a>", vesselNo="V00001", port="TXG",
+               agentName="測試船務代理股份有限公司", etaDt="2026-11-09T23:00:00",
+               spWharfCode="TXGX001\t測試一號碼頭", shipName=name, departed="")
+    return dict(row, **overrides)
+
+
+def berth(**overrides):
+    return dict(dict(visaNo="ATXG000000001", vesselNo="V00001", port="TXG", agentName="測試船務代理股份有限公司",
+                     etaDt="2026/11/09 23:00:00", spWharfCode=None, estWharf1="TXGX001\t測試一號碼頭",
+                     vesselCname="測試一號", vesselEname="TEST SHIP 1", spSts="進港作業"), **overrides)
+
+
+def page(*rows, **options):
+    return json.dumps({"result": rows, "count": options.get("count", len(rows))})
+
+
+class LookupTest(unittest.TestCase):
+    def lookup(self, name, *responses, **kwargs):
+        session = Mock()
+        session.request.side_effect = responses
+        with patch.object(agents, "PublicSession", return_value=session):
+            result = agents.lookup_ship(name, **kwargs)
+        self.assertEqual(session.request.call_count, len(responses))
+        return result, session.request.call_args_list
+
+    def test_found_switches_port_and_queries_only_matching_detail(self):
+        result, calls = self.lookup(" M/V  test  ship 1 ", PORT.replace("TXG", "APG"), PORT,
+                                    page(movement()), '{"callSign":"TEST01"}')
+        self.assertEqual(result, agents.ShipResult("found", "TEST SHIP 1", "測試一號", "TEST01",
+                                                   "測試船務代理股份有限公司", "測試一號碼頭", "2026-11-09T23:00:00"))
+        self.assertEqual(calls[1][1]["form"]["port"], "TXG")
+        self.assertEqual(calls[2][1]["payload"]["ShipName"], "TEST SHIP 1")
+        self.assertEqual(calls[3][1]["form"]["visaNo"], "ATXG000000001")
+
+    def test_normalizes_prefixes_whitespace_and_chinese_name(self):
+        for name, source_name in (("MV TEST SHIP 1", "測試一號\tTEST SHIP 1"),
+                                  ("M.V. TEST SHIP 1", "測試一號\tTEST SHIP 1"),
+                                  ("測試 一號", "測試一號\tTEST SHIP 1"),
+                                  ("M/V測試一號", "測試一號\tTEST SHIP 1"),
+                                  ("TEST SHIP 1", "測試一號\tTESTSHIP1")):
+            with self.subTest(name=name):
+                result, _ = self.lookup(name, PORT, page(movement(source_name)), '{"callSign":"TEST01"}')
+                self.assertEqual(result.status, "found")
+
+    def test_partial_match_is_not_found_and_queries_filtered_berth(self):
+        result, calls = self.lookup("SHIP 1", PORT, page(movement()), page(berth()))
+        self.assertEqual(result.status, "not_found")
+        self.assertTrue(calls[2][0][0].endswith(agents.BERTH + "GridSearchData"))
+        self.assertEqual(calls[2][1]["payload"]["ShipName"], "SHIP 1")
+
+    def test_same_vessel_latest_visa_across_pages(self):
+        old = movement(visaNo="ATXG000000009", etaDt="2026-11-08T23:00:00")
+        new = movement(visaNo="ATXG000000002", etaDt="2026-11-09T12:00:00", agentName="新測試代理")
+        with patch.object(agents, "PAGE_SIZE", 1):
+            result, calls = self.lookup("TEST SHIP 1", PORT, page(old, count=2), page(new, count=2),
+                                        '{"callSign":"TEST01"}')
+        self.assertEqual(result.agent_full, "新測試代理")
+        self.assertEqual([call[1]["payload"]["skip"] for call in calls[1:3]], [0, 1])
+        self.assertEqual(calls[3][1]["form"]["visaNo"], "ATXG000000002")
+
+    def test_different_vessels_are_ambiguous_even_with_same_agent(self):
+        another = movement(visaNo="ATXG000000002", vesselNo="V00002", spWharfCode="測試二號碼頭")
+        result, _ = self.lookup("TEST SHIP 1", PORT, page(movement(), another))
+        self.assertEqual(result.status, "ambiguous")
+        self.assertEqual([ship.berth for ship in result.candidates], ["測試一號碼頭", "測試二號碼頭"])
+        self.assertTrue(all(ship.ship_name and ship.agent_full and ship.eta for ship in result.candidates))
+
+    def test_departed_visas_excluded_from_both_views(self):
+        result, _ = self.lookup("TEST SHIP 1", PORT, page(movement(departed="<a>已離港</a>")),
+                                page(berth(), berth(visaNo="ATXG000000002", spSts="已出港")))
+        self.assertEqual(result.status, "not_found")
+
+    def test_berth_fallback_and_no_call_sign(self):
+        for detail in ('{"callSign":null}', '{"vesselEname":"TEST SHIP 1"}'):
+            with self.subTest(detail=detail):
+                result, calls = self.lookup("TEST SHIP 1", PORT, page(), page(berth()), detail)
+                self.assertEqual(result.status, "no_call_sign")
+                self.assertEqual(result.agent_full, "測試船務代理股份有限公司")
+                self.assertEqual(result.call_sign, "")
+                self.assertEqual(calls[2][1]["payload"]["ShipName"], "TEST SHIP 1")
+
+    def test_ignored_shipname_filter_retries_unfiltered_and_matches_locally(self):
+        unrelated = movement("TEST SHIP 2", visaNo="ATXG000000002", vesselNo="V00002")
+        response = page(movement(), unrelated)
+        result, calls = self.lookup("TEST SHIP 1", PORT, response, response, '{"callSign":"TEST01"}')
+        self.assertEqual(result.status, "found")
+        self.assertEqual([call[1]["payload"]["ShipName"] for call in calls[1:3]], ["TEST SHIP 1", ""])
+
+    def test_berth_ignored_filter_uses_same_fallback(self):
+        response = page(berth(vesselEname="TEST SHIP 2", vesselCname="測試二號",
+                              visaNo="ATXG000000002", vesselNo="V00002"), berth())
+        result, calls = self.lookup("TEST SHIP 1", PORT, page(), response, response, '{"callSign":"TEST01"}')
+        self.assertEqual(result.status, "found")
+        self.assertEqual([call[1]["payload"]["ShipName"] for call in calls[2:4]], ["TEST SHIP 1", ""])
+
+    def test_invalid_grid_or_detail_raises_format_error(self):
+        for responses in ((PORT, '{"count":1,"result":[{"unexpected":true}]}'),
+                          (PORT, page(movement()), '{"unexpected":true}')):
+            with self.subTest(responses=responses), self.assertRaises(agents.SourceFormatError):
+                self.lookup("TEST SHIP 1", *responses)
+
+    def test_network_error_propagates(self):
+        with self.assertRaisesRegex(agents.NetworkError, "offline"):
+            self.lookup("TEST SHIP 1", PORT, agents.NetworkError("offline"))
+
+    def test_request_retries_timeout(self):
         session = agents.PublicSession()
-        session.opener = Mock()
-        response = session.opener.open.return_value.__enter__ = Mock()
-        session.opener.open.return_value.__exit__ = Mock(return_value=False)
-        response.return_value.read.return_value = b"test"
-        response.return_value.headers.get_content_charset.return_value = "utf-8"
-        session.opener.open.side_effect = [TimeoutError, session.opener.open.return_value]
+        session.opener = MagicMock()
+        opened = session.opener.open.return_value
+        response = opened.__enter__.return_value
+        response.read.return_value = b"test"
+        response.headers.get_content_charset.return_value = "utf-8"
+        session.opener.open.side_effect = [TimeoutError, opened]
         with patch.object(agents.time, "sleep") as delay:
             self.assertEqual(session.request(agents.TPNET), "test")
         self.assertEqual(session.opener.open.call_count, 2)
-        self.assertEqual(session.opener.open.call_args.kwargs["timeout"], 20)
+        self.assertEqual(session.opener.open.call_args[1]["timeout"], 20)
         delay.assert_called_once()
-
-    def test_port_switch_and_primary_pages(self):
-        row = dict(visaNo="ATXG000000001", vesselNo="V00001", port="TXG", agentName=SHIPS[0].agent_full,
-                   etaDt="2026/11/09 23:00", spWharfCode=None, shipName="測試一號\tTEST SHIP 1", departed="")
-        second = dict(row, visaNo="ATXG000000002", vesselNo="V00002", shipName="測試二號\tTEST SHIP 2")
-        third = dict(row, visaNo="ATXG000000003", vesselNo="V00003", shipName="TEST SHIP 3", departed="已離港")
-        berth = dict(visaNo=row["visaNo"], vesselNo=row["vesselNo"], port="TXG", agentName=row["agentName"],
-                     etaDt=row["etaDt"], spWharfCode=None, estWharf1="TXGX001\t1號碼頭",
-                     vesselCname="測試一號", vesselEname="TEST SHIP 1")
-        session = Mock()
-        session.request.side_effect = [
-            '<input type="hidden" name="__RequestVerificationToken" value="old">',
-            '<input type="hidden" name="__RequestVerificationToken" value="new">'
-            '<select name="port"><option value="TXG" selected></option></select>',
-            json.dumps({"result": [row, second], "count": 3}),
-            json.dumps({"result": [third], "count": 3}),
-            json.dumps({"result": [berth], "count": 1}),
-        ]
-        with patch.object(agents, "PAGE_SIZE", 2):
-            rows, token = agents._primary_rows(session, "TXG")
-        self.assertEqual(token, "new")
-        self.assertEqual(list(rows), [row["visaNo"], second["visaNo"]])
-        self.assertEqual(rows[row["visaNo"]][0].ship_name_zh, "測試一號")
-        self.assertEqual(rows[row["visaNo"]][0].berth, "1號碼頭")
-        self.assertEqual(session.request.call_args_list[1].kwargs["form"]["port"], "TXG")
-        self.assertEqual([call.kwargs["payload"]["skip"] for call in session.request.call_args_list[2:]], [0, 2, 0])
-
-    def test_parse_sdci_and_follow_filtered_next_page(self):
-        original = HTML.read_text(encoding="utf-8")
-        rows, form, index, count = agents._sdci_page(original, "TXG")
-        self.assertEqual((index, count, len(rows)), (0, 1, 3))
-        self.assertEqual(rows[0][4], SHIPS[0].agent_full)
-        self.assertEqual(rows[0][16:19], ["TEST01", "9000001", "V00001"])
-        first = original.replace("'pageCount':1", "'pageCount':2")
-        second = first.replace("'pageIndex':0", "'pageIndex':1")
-        session = Mock()
-        session.request.side_effect = [first, second]
-        matches = agents._sdci_history(session, original, "TXG", "V00001")
-        self.assertEqual(len(matches), 2)
-        first_call, next_call = session.request.call_args_list
-        self.assertIn("APPLYSEARCHPANELFILTER", first_call.kwargs["form"]["__EVENTARGUMENT"])
-        self.assertEqual(next_call.kwargs["form"]["__EVENTARGUMENT"], "12|PAGERONCLICK3|PBN")
-        self.assertEqual(form["__VIEWSTATE"], "fake")
-
-    def test_changed_format_is_an_error(self):
-        original = HTML.read_text(encoding="utf-8")
-        with self.assertRaisesRegex(agents.SourceFormatError, "表格欄位"):
-            agents._sdci_page(original.replace("船務代理</td>", "代理</td>"), "TXG")
-        session = Mock()
-        session.request.return_value = '{"count":1,"result":[{"unexpected":true}]}'
-        with self.assertRaisesRegex(agents.SourceFormatError, "清單欄位"):
-            agents._primary_pages(session, agents.DYNAMIC, "TXG", "fake")
 
     def test_python37_syntax_and_no_fuelcore_import(self):
         source = Path(agents.__file__).read_text(encoding="utf-8")
@@ -93,82 +144,83 @@ class SourceTest(unittest.TestCase):
             node.level or (node.module or "").startswith("fuelcore")) for node in ast.walk(tree)))
         self.assertFalse(any(isinstance(node, ast.Name) and node.id in ("eval", "exec") for node in ast.walk(tree)))
 
+    def test_agent_cli_reports_found_ship(self):
+        from fuelcore.__main__ import main
 
-class LocalTest(unittest.TestCase):
+        output = io.StringIO()
+        result = agents.ShipResult("found", "TEST SHIP 1", "測試一號", "TEST01", "測試代理", "一號碼頭", "23:00")
+        with patch.object(agents, "lookup_ship", return_value=result) as lookup, redirect_stdout(output):
+            with patch("sys.argv", ["fuelcore", "agent", "--name", "TEST SHIP 1"]):
+                self.assertEqual(main(), 0)
+        lookup.assert_called_once_with("TEST SHIP 1")
+        for text in ("found", "TEST01", "測試代理", "一號碼頭", "23:00"):
+            self.assertIn(text, output.getvalue())
+
+
+class MappingTest(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory(dir=Path.cwd())
         self.addCleanup(folder.cleanup)
-        self.cache = Path(folder.name) / "ships.json"
         self.mapping = Path(folder.name) / "mapping.csv"
+        self.full = "測試船務代理股份有限公司"
 
-    def cache_at(self, age=0, ships=SHIPS):
-        stamp = datetime.now(timezone.utc) - timedelta(hours=age)
-        self.cache.write_text(json.dumps({"fetched_at": stamp.isoformat(),
-                                         "ships": [asdict(ship) for ship in ships]}), encoding="utf-8")
-        return stamp
-
-    def lookup(self, **kwargs):
-        return agents.lookup(cache_path=self.cache, **kwargs)
-
-    def test_fresh_cache_lookup_order_prefixes_and_no_match(self):
-        stamp = self.cache_at()
-        with patch.object(agents, "fetch_port_ships") as fetch:
-            self.assertEqual(self.lookup(imo="9000001", call_sign="TEST02").matched_by, "imo")
-            result = self.lookup(imo="9999999", call_sign=" test 02 ", ship_name="TEST SHIP 1")
-            self.assertEqual((result.ship, result.matched_by, result.fetched_at), (SHIPS[1], "call_sign", stamp))
-            for name in ("m/v test  ship  1", "MV TEST SHIP 1", "M.V. TEST SHIP 1", "測試一號"):
-                self.assertEqual(self.lookup(ship_name=name).ship, SHIPS[0])
-            self.assertEqual(self.lookup(ship_name="TEST SHIP").status, "not_found")
-            fetch.assert_not_called()
-
-    def test_different_agents_are_ambiguous(self):
-        other = replace(SHIPS[0], agent_full="另一家測試代理行")
-        self.cache_at(ships=[SHIPS[0], other])
-        result = self.lookup(imo="9000001", call_sign="TEST01")
-        self.assertEqual((result.status, result.ship, result.matched_by), ("ambiguous", None, "imo"))
-        self.assertEqual(result.candidates, (SHIPS[0], other))
-
-    def test_expired_and_forced_refresh(self):
-        stamp = self.cache_at(age=7)
-        with patch.object(agents, "fetch_port_ships", return_value=SHIPS) as fetch:
-            self.assertGreater(self.lookup(imo="9000001").fetched_at, stamp)
-            self.lookup(imo="9000001", refresh=True)
-            self.assertEqual(fetch.call_count, 2)
-
-    def test_network_failure_keeps_old_cache_but_format_error_is_visible(self):
-        stamp = self.cache_at(age=7)
-        before = self.cache.read_bytes()
-        with patch.object(agents, "fetch_port_ships", side_effect=agents.NetworkError("offline")):
-            result = self.lookup(imo="9000001")
-        self.assertEqual((result.ship, result.fetched_at, result.stale, result.warning),
-                         (SHIPS[0], stamp, True, "offline"))
-        self.assertEqual(before, self.cache.read_bytes())
-        with patch.object(agents, "fetch_port_ships", side_effect=agents.SourceFormatError("changed")):
-            with self.assertRaises(agents.SourceFormatError):
-                self.lookup(imo="9000001")
+    def resolve(self, shorts=()):
+        return agents.resolve_short(self.full, shorts, self.mapping)
 
     def test_mapping_priority_update_and_bom(self):
-        full = "測試船務代理股份有限公司"
-        agents.save_mapping(self.mapping, full, "原簡稱")
-        agents.save_mapping(self.mapping, full, "新簡稱")
+        agents.save_mapping(self.mapping, self.full, "原簡稱")
+        agents.save_mapping(self.mapping, self.full, "新簡稱")
         self.assertTrue(self.mapping.read_bytes().startswith(b"\xef\xbb\xbf"))
         self.assertEqual(self.mapping.read_text(encoding="utf-8-sig").splitlines(),
-                         ["完整名稱,簡稱", full + ",新簡稱"])
-        result = agents.resolve_short(full, ["測試", "船務"], self.mapping)
-        self.assertEqual((result.status, result.short), ("mapped", "新簡稱"))
+                         ["完整名稱,簡稱", self.full + ",新簡稱"])
+        self.assertEqual(self.resolve(["測試", "船務"]).short, "新簡稱")
 
     def test_unique_substring_ambiguous_and_unmatched_shorts(self):
-        resolve = lambda shorts: agents.resolve_short("測試船務代理股份有限公司", shorts, self.mapping)
-        self.assertEqual(resolve(["測試", "無關", "測試"]).short, "測試")
-        self.assertEqual(resolve(["測試", "船務", "無關"]).candidates, ("測試", "船務"))
-        self.assertEqual(resolve(["無關"]).status, "needs_selection")
-        self.assertEqual(resolve(["無關"]).candidates, ("無關",))
+        self.assertEqual(self.resolve(["測試", "無關", "測試"]).short, "測試")
+        self.assertEqual(self.resolve(["測試", "船務", "無關"]).candidates, ("測試", "船務"))
+        self.assertEqual(self.resolve(["無關"]).status, "needs_selection")
+        self.assertEqual(self.resolve(["無關"]).candidates, ("無關",))
+
+    def test_excel_cp950_csv(self):
+        self.mapping.write_bytes(("完整名稱,簡稱\r\n" + self.full + ",測試\r\n").encode("cp950"))
+        self.assertEqual(self.resolve().short, "測試")
+        agents.save_mapping(self.mapping, self.full, "新簡稱")
+        self.assertTrue(self.mapping.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+    def test_ignores_extra_empty_columns(self):
+        self.mapping.write_text("完整名稱,簡稱,\n" + self.full + ",測試,\n", encoding="utf-8-sig")
+        self.assertEqual(self.resolve().short, "測試")
+
+    def test_bad_csv_encoding(self):
+        self.mapping.write_bytes(b"\xff\xff")
+        with self.assertRaisesRegex(ValueError, "代理行對照表編碼無法辨識，請另存為 CSV UTF-8"):
+            self.resolve()
 
 
 @unittest.skipUnless(os.getenv("FUELCORE_ONLINE") == "1", "需設定 FUELCORE_ONLINE=1")
 class OnlineTest(unittest.TestCase):
-    def test_taichung_public_list(self):
-        ships = agents.fetch_port_ships()
-        print("臺中港 {} 筆".format(len(ships)), flush=True)
-        self.assertTrue(ships)
-        self.assertTrue(any(ship.agent_full for ship in ships))
+    def test_taichung_one_ship(self):
+        name = os.getenv("FUELCORE_ONLINE_SHIP")
+        if not name:
+            session = agents.PublicSession()
+            token = agents._select_port(session, "TXG")
+            rows = agents._primary_pages(session, agents.DYNAMIC, "TXG", token, "")
+            name = next((agents._names(row, agents.DYNAMIC)[0] for row in rows
+                         if not agents._value(agents._visible(agents._text(row["departed"])))
+                         and agents._names(row, agents.DYNAMIC)[0]), "")
+            self.assertTrue(name, "臺中港清單目前沒有可測試的船")
+        requests = []
+        original_open = HTTPSHandler.https_open
+
+        def count(handler, request):
+            requests.append(request.full_url)
+            return original_open(handler, request)
+
+        start = time.monotonic()
+        with patch.object(HTTPSHandler, "https_open", count):
+            result = agents.lookup_ship(name)
+        elapsed = time.monotonic() - start
+        print("{}｜呼號 {}｜{}｜{} 次 HTTPS｜{:.2f} 秒".format(
+            result.ship_name, result.call_sign, result.agent_full, len(requests), elapsed), flush=True)
+        self.assertEqual(result.status, "found")
+        self.assertTrue(result.agent_full)

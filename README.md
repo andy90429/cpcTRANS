@@ -161,14 +161,13 @@ python -m fuelcore.generate $env:FUELCORE_SAMPLES .\generated --seed 55
 ## 臺中港船務代理查詢
 
 ```powershell
-python -m fuelcore agent-refresh
-python -m fuelcore agent --imo 9000001
-python -m fuelcore agent --callsign TEST01 --shorts .fuelcore-agent/shorts
+python -m fuelcore agent --name "TEST SHIP 1"
+python -m fuelcore agent --name "TEST SHIP 1" --mapping .fuelcore-agent/mapping.csv --shorts .fuelcore-agent/shorts
 ```
 
-可用 `--name` 查中英文船名。預設快取六小時，失敗時會標示舊快取時間。可用 `--cache` 指定快取，`--mapping` 指定 UTF-8 BOM 對照 CSV，`--shorts` 指定每行一個簡稱的文字檔或印章圖片資料夾。請把這些本機資料放在已排除的 `.fuelcore-agent/`，或由呼叫端指定 repo 外的路徑。
+指令用中英文船名查單艘船，顯示狀態、呼號、代理行全名、碼頭及 ETA。提供 `--mapping` 或 `--shorts` 才會顯示簡稱或候選。對照 CSV 可讀 UTF-8 或 CP950，寫回使用 UTF-8 BOM。`--shorts` 接受每行一個簡稱的文字檔或印章圖片資料夾。請將對照表和印章留在已排除的 `.fuelcore-agent/`，或由呼叫端指定 repo 外的路徑。
 
-獨立模組 `fuelcore/agent_lookup.py` 僅使用 Python 3.7 標準函式庫。網站調查與欄位限制見 `docs/TPNET代理行_調查.md`。
+獨立模組 `fuelcore/agent_lookup.py` 僅使用 Python 3.7 標準函式庫。移植到 CPCtrans 時，可在 TXT 缺呼號時呼叫 `lookup_ship(ship_name)`。只有呼叫時會上網。網站調查與欄位限制見 `docs/TPNET代理行_調查.md`。
 
 ## 待確認與資料差異
 

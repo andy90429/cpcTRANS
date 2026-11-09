@@ -45,19 +45,12 @@ def main():
     print_cmd.add_argument("--config", required=True)
     print_cmd.add_argument("--yes", action="store_true", help="略過送印確認")
     commands.add_parser("list-printers", help="列出 Windows 已安裝的印表機")
-    from fuelcore.agent_lookup import DEFAULT_CACHE, DEFAULT_DIR, DEFAULT_MAPPING
-
-    agent = commands.add_parser("agent", help="依 IMO、呼號或船名查詢臺中港代理行")
-    agent.add_argument("--imo")
-    agent.add_argument("--callsign")
-    agent.add_argument("--name")
-    agent.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
-    agent.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
-    agent.add_argument("--shorts", type=Path, default=DEFAULT_DIR / "shorts")
-    refresh = commands.add_parser("agent-refresh", help="更新臺中港船務代理清單")
-    refresh.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    agent = commands.add_parser("agent", help="依船名查詢臺中港的呼號及代理行")
+    agent.add_argument("--name", required=True)
+    agent.add_argument("--mapping", type=Path)
+    agent.add_argument("--shorts", type=Path)
     args = parser.parse_args()
-    if args.command in ("agent", "agent-refresh"):
+    if args.command == "agent":
         return run_agent(args)
     if args.command == "list-printers":
         from fuelcore.report.printing import list_printers
@@ -142,42 +135,38 @@ def run_conversion(paths, settings):
 
 
 def run_agent(args):
-    from fuelcore.agent_lookup import AgentLookupError, lookup, refresh_port_ships, resolve_short
+    from fuelcore.agent_lookup import DEFAULT_DIR, DEFAULT_MAPPING, AgentLookupError, lookup_ship, resolve_short
 
     try:
-        if args.command == "agent-refresh":
-            ships, stamp, warning = refresh_port_ships(args.cache)
-            print(f"臺中港 {len(ships)} 筆，資料時間 {stamp.astimezone().isoformat(timespec='seconds')}")
-            if warning:
-                print(f"使用舊快取：{warning}", file=sys.stderr)
-            return int(bool(warning))
-        result = lookup(args.imo, args.callsign, args.name, args.cache)
-        print("資料時間 " + result.fetched_at.astimezone().isoformat(timespec="seconds"))
-        if result.stale:
-            print(f"使用舊快取：{result.warning}", file=sys.stderr)
+        result = lookup_ship(args.name)
+        print(f"狀態：{result.status}")
         if result.status == "not_found":
             print("找不到")
             return 1
         if result.status == "ambiguous":
-            print(f"有多筆（{result.matched_by}）")
+            print("有多筆同名船")
             for ship in result.candidates:
-                print(f"{ship.ship_name}｜{ship.call_sign}｜{ship.imo}｜{ship.agent_full or '無代理行資料'}")
+                print(f"{ship.ship_name} {ship.ship_name_zh}｜{ship.agent_full or '無代理行資料'}"
+                      f"｜碼頭 {ship.berth or '—'}｜ETA {ship.eta or '—'}")
             return 1
-        ship = result.ship
-        print(f"{ship.ship_name}｜{ship.agent_full or '無代理行資料'}（依 {result.matched_by}）")
-        if args.shorts.is_dir():
-            shorts = sorted(path.stem for path in args.shorts.iterdir()
+        print(f"{result.ship_name}｜呼號 {result.call_sign or '—'}｜代理行 {result.agent_full or '—'}"
+              f"｜碼頭 {result.berth or '—'}｜ETA {result.eta or '—'}")
+        if args.mapping is None and args.shorts is None:
+            return int(result.status != "found")
+        shorts_path = args.shorts or DEFAULT_DIR / "shorts"
+        if shorts_path.is_dir():
+            shorts = sorted(path.stem for path in shorts_path.iterdir()
                             if path.is_file() and path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp"))
-        elif args.shorts.is_file():
-            shorts = args.shorts.read_text(encoding="utf-8-sig").splitlines()
+        elif shorts_path.is_file():
+            shorts = shorts_path.read_text(encoding="utf-8-sig").splitlines()
         else:
             shorts = []
-        short = resolve_short(ship.agent_full, shorts, args.mapping)
+        short = resolve_short(result.agent_full, shorts, args.mapping or DEFAULT_MAPPING)
         if short.short:
             print(f"簡稱：{short.short}")
         else:
             print("需要使用者選" + ("：" + "、".join(short.candidates) if short.candidates else ""))
-        return 0
+        return int(result.status != "found")
     except (AgentLookupError, OSError, ValueError) as error:
         print(f"代理行查詢失敗：{error}", file=sys.stderr)
         return 1
