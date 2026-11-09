@@ -158,6 +158,18 @@ python -m unittest discover -s tests -v
 python -m fuelcore.generate $env:FUELCORE_SAMPLES .\generated --seed 55
 ```
 
+## 臺中港船務代理查詢
+
+```powershell
+python -m fuelcore agent-refresh
+python -m fuelcore agent --imo 9000001
+python -m fuelcore agent --callsign TEST01 --shorts .fuelcore-agent/shorts
+```
+
+可用 `--name` 查中英文船名。預設快取六小時，失敗時會標示舊快取時間。可用 `--cache` 指定快取，`--mapping` 指定 UTF-8 BOM 對照 CSV，`--shorts` 指定每行一個簡稱的文字檔或印章圖片資料夾。請把這些本機資料放在已排除的 `.fuelcore-agent/`，或由呼叫端指定 repo 外的路徑。
+
+獨立模組 `fuelcore/agent_lookup.py` 僅使用 Python 3.7 標準函式庫。網站調查與欄位限制見 `docs/TPNET代理行_調查.md`。
+
 ## 待確認與資料差異
 
 - Q1–Q5 的 TODO 集中於 `fuelcore/convert.py`。主檔稅則讀 I2，項次讀設定，付款方式固定 08。`PKGTOTAL` 暫採四捨五入至整數，`EXPQUAN` 保留項次公噸加總的小數，`FOBPRICE` 保留 H26 的兩位小數。未列欄位交由資料庫給預設值，報單品名換行讀油品表。

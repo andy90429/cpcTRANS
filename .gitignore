@@ -11,6 +11,7 @@ dist/
 參考輸出/
 清晰底圖/
 列印輸出/
+.fuelcore-agent/
 *.[rR][pP][tT]
 *.[rR][pP][xX]
 *.[bB][mM][pP]
