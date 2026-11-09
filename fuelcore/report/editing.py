@@ -200,7 +200,8 @@ class EditableReport:
         if inputs is not None:
             return trial, trial.calculate(inputs, exchange=exchange)
         fields = TrialFields(self.batch.fronts[index])
-        current = trial.calculate(self.inputs(index), exchange=self.exchange(index))
+        inputs = tuple(replace(entry, price=item.price) for entry, item in zip(self.inputs(index), trial.items))
+        current = trial.calculate(inputs)
         return trial, fields.snapshot(current)
 
     def release(self, index):
@@ -213,27 +214,28 @@ class EditableReport:
         return [(position, field.name, caption(field)) for position, field in enumerate(self.batch.fronts[index].children)
                 if field.get("Caption") is not None and field.boolean("Visible", True) and field.boolean("isVisible", True)]
 
-    def edit(self, index, field_index, value, folder):
+    def edit(self, index, field_index, value):
         if field_index not in {position for position, _, _ in self.fields(index)}:
             raise RpxError("找不到可修改的顯示欄位")
         copy = deepcopy(self)
         copy.batch.fronts[index].children[field_index].set_text("Caption", value)
-        return copy, copy.save(folder, index)
+        return copy
 
-    def apply(self, index, inputs, folder, *, exchange=None):
+    def apply(self, index, inputs, *, exchange=None):
         result = self.trial(index).calculate(inputs, exchange=exchange)
         copy = deepcopy(self)
         TrialFields(copy.batch.fronts[index]).apply(result)
         copy.densities[index] = tuple(entry.density for entry in inputs)
-        return copy, copy.save(folder, index)
+        return copy
 
     def save(self, folder, index):
         return new_copy(folder, self.batch.ids[index], ".Rpx", self.document.to_bytes(), self.batch.assets)
 
-    def pdf(self):
+    def pdf(self, *, cache_backgrounds=True):
         from .pdf import render_pdf
 
-        return render_pdf(self.batch.pages, self.batch.assets, self.batch.cache, self.batch.warnings)
+        cache = self.batch.cache if cache_backgrounds else None
+        return render_pdf(self.batch.pages, self.batch.assets, cache, self.batch.warnings)
 
     def export_pdf(self, folder):
         return new_copy(folder, self.batch.ids[0], ".pdf", self.pdf(), self.batch.assets)

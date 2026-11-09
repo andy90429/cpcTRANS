@@ -41,9 +41,8 @@ def clear_background(source, points, cache):
     if size[0] * size[1] > 100_000_000:
         raise RpxError("600 dpi 底圖尺寸過大")
     key = hashlib.sha256(data + f":{size}:600:unsharp-2-180-2:threshold-180:v1".encode()).hexdigest()
-    cache.mkdir(parents=True, exist_ok=True)
-    dest = cache / f"{key}.png"
-    if dest.is_file():
+    dest = cache / f"{key}.png" if cache is not None else None
+    if dest is not None and dest.is_file():
         with Image.open(dest) as cached:
             if cached.mode == "1" and cached.size == size:
                 return cached.copy()
@@ -51,6 +50,9 @@ def clear_background(source, points, cache):
         grey = original.convert("L").resize(size, Image.Resampling.LANCZOS)
     crisp = grey.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=2))
     bitmap = crisp.point([0] * 180 + [255] * 76, "1")
+    if dest is None:
+        return bitmap
+    cache.mkdir(parents=True, exist_ok=True)
     temp = None
     try:
         with NamedTemporaryFile(dir=cache, suffix=".png", delete=False) as handle:

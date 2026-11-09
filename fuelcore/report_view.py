@@ -23,6 +23,9 @@ class ReportPage:
         self.report = None
         self.pdf = None
         self.image = None
+        self.selected_page = 0
+        self.saved_report = self.saved_pdf = None
+        self.dirty_notice = tk.StringVar()
         self.selection = tk.StringVar()
         self.number = tk.StringVar()
         self.status = tk.StringVar(value="請輸入報單號碼或開啟 Rpx 副本。")
@@ -47,6 +50,7 @@ class ReportPage:
         for index, (label, command) in enumerate((
             ("輸出 PDF", self.export), ("直接列印", self.print_report), ("試算", self.open_trial),
             ("更正申請書 Excel", self.export_excel), ("修改欄位", self.open_editor),
+            ("另存 Rpx", self.save_rpx),
         )):
             button = ttk.Button(actions, text=label, command=command, state="disabled")
             button.grid(row=index // 3, column=index % 3, sticky="ew", padx=(0, 6), pady=2)
@@ -56,8 +60,9 @@ class ReportPage:
         ttk.Label(pager, text="預覽頁面").pack(side="left", padx=(0, 8))
         self.pages = ttk.Combobox(pager, textvariable=self.selection, state="readonly", width=27)
         self.pages.pack(side="left")
-        self.pages.bind("<<ComboboxSelected>>", lambda _: self.preview())
+        self.pages.bind("<<ComboboxSelected>>", self.select_page)
         ttk.Checkbutton(pager, text="放大", variable=self.zoom, command=self.preview).pack(side="left", padx=10)
+        ttk.Label(pager, textvariable=self.dirty_notice, foreground="#b54708").pack(side="left")
         view = ttk.Frame(page, style="Card.TFrame")
         view.grid(sticky="nsew")
         view.rowconfigure(0, weight=1)
@@ -71,8 +76,11 @@ class ReportPage:
         scroll_x.grid(row=1, column=0, sticky="ew")
         self.canvas.bind("<MouseWheel>", lambda event: self.canvas.yview_scroll(-int(event.delta / 120), "units"))
         self.canvas.bind("<Configure>", self.position_preview)
-        status = ttk.Label(page, textvariable=self.status)
-        status.grid(sticky="ew", pady=(6, 0))
+        footer = ttk.Frame(page)
+        footer.grid(sticky="ew", pady=(6, 0))
+        ttk.Label(footer, textvariable=self.dirty_notice, foreground="#b54708").pack(side="right", padx=(10, 0))
+        status = ttk.Label(footer, textvariable=self.status)
+        status.pack(side="left", fill="x", expand=True)
         status.bind("<Configure>", lambda event: status.configure(wraplength=max(200, event.width - 8)))
 
     def settings(self):
@@ -105,6 +113,8 @@ class ReportPage:
         self.load_task(lambda: EditableReport.from_database(self.settings(), ids))
 
     def open(self):
+        if self.workbench.busy:
+            return
         path = filedialog.askopenfilename(parent=self.page, filetypes=[("Rpx 報單", "*.rpx")])
         if path:
             self.load_task(lambda: EditableReport.open(Path(path)))
@@ -114,19 +124,58 @@ class ReportPage:
             report = source()
             return report, report.pdf()
 
-        self.task("產生報單預覽…", work, lambda result: self.install(*result))
+        self.confirm_leave(lambda: self.task("產生報單預覽…", work, lambda result: self.install(*result)))
 
-    def install(self, report, pdf, index=0, path=None):
+    def install(self, report, pdf, index=0, *, edited=False):
         self.report, self.pdf = report, pdf
+        if not edited:
+            self.saved_report, self.saved_pdf = report, pdf
         choices = [f"{i + 1} · {number} · {side}" for i, (number, side) in enumerate(
             (number, side) for number in report.batch.ids for side in ("正面", "背面")
         )]
         self.pages.configure(values=choices)
-        self.pages.current(index)
-        self.status.set(f"已儲存 {path}" if path else f"已載入 {len(report.batch.ids)} 張報單。")
+        self.status.set("已更新預覽。" if edited else f"已載入 {len(report.batch.ids)} 張報單。")
         for button in self.buttons.values():
             button.state(["!disabled"])
+        self.update_dirty()
+        self.show_page(index)
+
+    def update_dirty(self):
+        changed = self.report.document.to_bytes() != self.saved_report.document.to_bytes()
+        self.dirty_notice.set("已修改，未存檔" if changed else "")
+        self.buttons["另存 Rpx"].state(["!disabled" if changed else "disabled"])
+
+    def show_page(self, index):
+        self.selected_page = index
+        self.pages.current(index)
         self.preview()
+
+    def select_page(self, _=None):
+        target = self.pages.current()
+        self.pages.current(self.selected_page)
+        if self.workbench.busy or target < 0:
+            return
+        if target // 2 == self.selected_page // 2:
+            self.show_page(target)
+        else:
+            self.confirm_leave(lambda: self.show_page(target),
+                               lambda: self.install(self.saved_report, self.saved_pdf, target))
+
+    def confirm_leave(self, proceed, discard=None):
+        if self.workbench.busy:
+            return
+        if not self.dirty_notice.get():
+            proceed()
+            return
+        answer = messagebox.askyesnocancel(
+            "要不要另存 Rpx？",
+            "目前報單已修改，未存檔。\n\n選「是」另存 Rpx，「否」不存檔，「取消」留在目前報單。",
+            parent=self.page,
+        )
+        if answer is True:
+            self.save_rpx(after=proceed)
+        elif answer is False:
+            (discard or proceed)()
 
     def preview(self):
         if self.pdf is None:
@@ -164,6 +213,20 @@ class ReportPage:
     def saved(self, path):
         self.status.set(f"已儲存 {path}")
 
+    def save_rpx(self, *, after=None):
+        if self.workbench.busy:
+            return
+        report, index = self.active_report()
+
+        def done(path):
+            self.saved_report, self.saved_pdf = report, self.pdf
+            self.update_dirty()
+            self.saved(path)
+            if after:
+                after()
+
+        self.task("另存 Rpx 副本…", lambda: report.save(self.output, index), done)
+
     def export(self):
         report, _ = self.active_report()
         self.task("輸出 PDF…", lambda: report.export_pdf(self.output), self.saved)
@@ -191,16 +254,18 @@ class ReportPage:
         self.task("產生更正申請書…", lambda: export_correction(report, index, inputs, self.output,
                                                                exchange=exchange), self.saved)
 
-    def change(self, index, operation):
+    def change(self, index, operation, *, save=False):
         def work():
-            report, path = operation()
-            return report, report.pdf(), path
+            report = operation()
+            return report, report.pdf(cache_backgrounds=False)
 
         def done(result):
-            report, pdf, path = result
-            self.install(report, pdf, index * 2, path)
+            report, pdf = result
+            self.install(report, pdf, index * 2, edited=True)
+            if save:
+                self.save_rpx()
 
-        self.task("儲存 Rpx 副本…", work, done)
+        self.task("更新報單預覽…", work, done)
 
     def open_trial(self):
         if self.workbench.busy:
@@ -234,15 +299,15 @@ class ReportPage:
             editor.delete("1.0", "end")
             editor.insert("1.0", fields[picker.current()][2])
 
-        def save():
+        def apply():
             if self.workbench.busy:
                 return
             position = fields[picker.current()][0]
             value = editor.get("1.0", "end-1c")
-            self.change(index, lambda: report.edit(index, position, value, self.output))
+            self.change(index, lambda: report.edit(index, position, value))
             window.destroy()
 
-        ttk.Button(window, text="另存 Rpx 副本", command=save).grid(row=2, column=0, sticky="e", padx=12, pady=10)
+        ttk.Button(window, text="套用", command=apply).grid(row=2, column=0, sticky="e", padx=12, pady=10)
         picker.bind("<<ComboboxSelected>>", load_field)
         picker.current(0)
         load_field()
@@ -260,7 +325,7 @@ class TrialDialog:
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(1, weight=1)
         width = min(1040, self.window.winfo_screenwidth() - 100)
-        height = min(270 + 42 * len(entries), 530, self.window.winfo_screenheight() - 120)
+        height = min(650, self.window.winfo_screenheight() - 80)
         self.window.geometry(f"{width}x{height}")
         ttk.Label(self.window, text="數量金額試算", style="Title.TLabel").grid(sticky="w", padx=14, pady=12)
         table = ttk.Frame(self.window)
@@ -277,60 +342,68 @@ class TrialDialog:
         canvas.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         scroll_x.grid(row=1, column=0, sticky="ew")
-        self.values, self.results = [], []
+        self.values, self.results, self.price_entries = [], [], []
         self.total = tk.StringVar()
         self.notice = tk.StringVar()
         item = self.trial.items[0]
-        headings = ("項次", f"數量 ({item.unit})", "單價 (USD)", "密度（選填）", "金額 (USD)",
-                    "淨重 (KGM)", f"統計數量 ({item.stat_unit})", "離岸價格 (TWD)")
+        headings = ("項次", f"數量 ({item.unit})", "單價 (USD)", "金額 (USD)",
+                    "淨重 (KGM)", f"統計數量 ({item.stat_unit})", "離岸價格 (TWD)", "密度（選填）")
         for col, name in enumerate(headings):
             ttk.Label(grid, text=name).grid(row=0, column=col, padx=5, pady=6, sticky="w")
         for row, (item, entry) in enumerate(zip(self.trial.items, entries), 1):
             ttk.Label(grid, text=item.number).grid(row=row, column=0, pady=3)
-            variables = [tk.StringVar(value=str(value) if value is not None else "")
-                         for value in (entry.quantity, entry.price, entry.density)]
-            for col, var in enumerate(variables, 1):
-                ttk.Entry(grid, width=11, textvariable=var).grid(row=row, column=col, padx=3, pady=4)
-                var.trace_add("write", self.update)
-            self.values.append(variables)
+            quantity = tk.StringVar(value=str(entry.quantity))
+            density = tk.StringVar(value="" if entry.density is None else str(entry.density))
+            ttk.Entry(grid, width=11, textvariable=quantity).grid(row=row, column=1, padx=3, pady=4)
+            price_entry = ttk.Entry(grid, width=11)
+            price_entry.insert(0, str(item.price))
+            price_entry.state(["readonly"])
+            price_entry.grid(row=row, column=2, padx=3, pady=4)
+            self.price_entries.append(price_entry)
+            ttk.Entry(grid, width=7, textvariable=density).grid(row=row, column=7, padx=3, pady=4)
+            for variable in (quantity, density):
+                variable.trace_add("write", self.update)
+            self.values.append((quantity, density))
             result = [tk.StringVar() for _ in range(4)]
             self.results.append(result)
-            for col, var in enumerate(result, 4):
+            for col, var in enumerate(result, 3):
                 ttk.Label(grid, textvariable=var, width=13, anchor="e").grid(row=row, column=col, padx=3)
         ttk.Label(self.window, textvariable=self.total, wraplength=width - 40).grid(sticky="w", padx=14, pady=5)
         release = report.release(index) or "報單未載"
         details = ttk.Frame(self.window)
         details.grid(sticky="w", padx=14)
-        self.exchange = tk.StringVar(value=str(report.exchange(index)))
-        self.exchange.trace_add("write", self.update)
+        self.exchange = tk.StringVar(value=str(self.trial.exchange))
         ttk.Label(details, text="匯率").pack(side="left")
-        ttk.Entry(details, width=11, textvariable=self.exchange).pack(side="left", padx=5)
+        self.exchange_entry = ttk.Entry(details, width=11, textvariable=self.exchange, state="readonly")
+        self.exchange_entry.pack(side="left", padx=5)
         ttk.Label(details, text=f"放行日期 {release}").pack(side="left")
         ttk.Label(self.window, textvariable=self.notice, wraplength=760).grid(sticky="w", padx=14, pady=4)
         bar = ttk.Frame(self.window, padding=(14, 6))
         bar.grid(sticky="ew")
-        self.save = ttk.Button(bar, text="套用並另存 Rpx", style="Primary.TButton", command=self.apply)
+        self.apply_button = ttk.Button(bar, text="套用", style="Primary.TButton", command=self.apply)
+        self.save = ttk.Button(bar, text="另存 Rpx", command=lambda: self.apply(save=True))
         self.excel = ttk.Button(bar, text="產生更正申請書", command=self.export)
+        self.apply_button.pack(side="left", padx=(0, 6))
         self.save.pack(side="left", padx=(0, 6))
         self.excel.pack(side="left")
         self.update()
         self.window.grab_set()
 
     def inputs(self):
-        return tuple(ItemInput(decimal_input(q.get()), decimal_input(p.get()),
+        return tuple(ItemInput(decimal_input(q.get()), item.price,
                                decimal_input(d.get()) if d.get().strip() else None)
-                     for q, p, d in self.values)
+                     for item, (q, d) in zip(self.trial.items, self.values))
 
     def update(self, *_):
         try:
-            result = self.trial.calculate(self.inputs(), exchange=decimal_input(self.exchange.get()))
+            result = self.trial.calculate(self.inputs())
         except RpxError as error:
             self.total.set("")
             self.notice.set(str(error))
             for variables in self.results:
                 for var in variables:
                     var.set("—")
-            for button in (self.save, self.excel):
+            for button in (self.apply_button, self.save, self.excel):
                 button.state(["disabled"])
             return
         for variables, row in zip(self.results, result.rows):
@@ -340,20 +413,18 @@ class TrialDialog:
                        f"統計數量 {result.liters:,}\n離岸價格 TWD {result.twd:,}　推廣費 {result.fee:,}")
         self.notice.set("部分項次無法從原值反推 API，目前以原比例換算。可輸入密度改用 Table 13。"
                         if any(row.needs_density for row in result.rows) else "")
-        for button in (self.save, self.excel):
+        for button in (self.apply_button, self.save, self.excel):
             button.state(["!disabled"])
 
-    def apply(self):
+    def apply(self, *, save=False):
         if self.view.workbench.busy:
             return
         inputs = self.inputs()
-        exchange = decimal_input(self.exchange.get())
-        self.view.change(self.index, lambda: self.report.apply(self.index, inputs, self.view.output,
-                                                              exchange=exchange))
+        self.view.change(self.index, lambda: self.report.apply(self.index, inputs), save=save)
         self.window.destroy()
 
     def export(self):
         if self.view.workbench.busy:
             return
-        self.view.save_excel(self.report, self.index, self.inputs(), exchange=decimal_input(self.exchange.get()))
+        self.view.save_excel(self.report, self.index, self.inputs())
         self.window.destroy()

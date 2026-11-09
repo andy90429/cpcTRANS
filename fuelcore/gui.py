@@ -454,7 +454,7 @@ class Workbench:
         if self.busy:
             messagebox.showinfo("fuelcore", "作業進行中，請等候完成後再關閉。", parent=self.root)
         else:
-            self.root.destroy()
+            self.report_page.confirm_leave(lambda: self.root.after_idle(self.root.destroy))
 
 
 def run(config_path):
