@@ -5,3 +5,5 @@ dist/
 .venv_build/
 *.[iI][nN][iI]
 *.sqlite3
+只放本機_CBS設定/
+參考程式_只放本機/

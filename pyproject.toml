@@ -14,4 +14,4 @@ mysql = ["PyMySQL>=1.0.2,<2"]
 fuelcore = ["schema.csv"]
 
 [tool.setuptools]
-packages = ["fuelcore"]
+packages = ["fuelcore", "fuelcore.edi"]

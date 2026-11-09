@@ -25,8 +25,17 @@ def main():
     schema.add_argument("--config", required=True)
     schema.add_argument("--csv", type=Path, default=SCHEMA)
     schema.add_argument("--output", type=Path)
+    simulate = commands.add_parser("simulate-send", help="在測試庫以唯讀方式規劃送信")
+    simulate.add_argument("sersno", nargs="+")
+    simulate.add_argument("--config", required=True)
+    simulate.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     settings = Settings.load(args.config)
+    if args.command == "simulate-send":
+        from fuelcore.edi import simulate_send
+        result = simulate_send(settings, args.sersno, args.output)
+        print(result.directory / "模擬結果.txt")
+        return int(bool(result.rejected))
     if args.command == "schema":
         if settings.driver == "sqlite":
             init_sqlite(settings, args.csv)

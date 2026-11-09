@@ -73,6 +73,26 @@ python -m fuelcore schema --config fuelcore.ini --output fuelcore_test.sql
 
 MySQL 報單表與代碼表使用同一個連線和交易。船舶代碼維護若發生可回復錯誤，回滾該段並留下說明。SQLite 把有小數位的欄位存成定點文字，以保留尾端的零供測試核對。
 
+## 送信模擬
+
+在自己的 `fuelcore.ini` 新增 `[edi]`。MySQL 會透過同一組連線查詢報單、EDI 與 XML 設定測試庫。`company_code` 是檔名使用的 8 碼公司代碼，`user` 用於擬新增的送信紀錄。SQLite 測試可將測試資料表放在同一個檔案。
+
+```ini
+[edi]
+edi_database = test_edi
+xmlset_database = test_xmlset
+company_code = 00000000
+user = USER1
+```
+
+```powershell
+python -m fuelcore simulate-send TEST00A10E0777 TEST00A10E0781 --config fuelcore.ini --output .\模擬輸出
+```
+
+命令在指定目錄下建立一個新的批次資料夾。`STATUS=Y` 且通過送前檢查的報單會產生 N5203 XML。`模擬結果.txt` 記錄預計使用的日序號、封包號碼、SendMsgRcds 欄位及 CUSDEC 變更。有任何報單被略過時退出碼為 1。資料庫操作限於 SELECT，輸出檔留在模擬資料夾。
+
+如需用本機 CSV 驗證，可將 `FUELCORE_CBS_CONFIG` 指向 repo 外的 `只放本機_CBS設定` 資料夾。此設定會覆蓋 XML 設定庫來源，報單與序號仍由測試資料庫讀取。未設定時，依賴這批 CSV 的測試會跳過。
+
 ## 驗證與產生測試檔
 
 ```powershell
