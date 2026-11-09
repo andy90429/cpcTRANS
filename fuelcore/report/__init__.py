@@ -83,16 +83,10 @@ def reference_comparison(assets, reports, warnings):
 
 
 def prepare_report(settings, sersnos, *, reports=None, cache=None, connection=None):
-    reports = reports or os.environ.get("FUELCORE_CBS_REPORTS")
-    if not reports:
-        raise RpxError("請將 FUELCORE_CBS_REPORTS 指向本機 CBS 報表資料夾")
-    assets = ReportAssets(reports)
+    assets, cache = report_resources(reports, cache)
     ids = [sersno.strip().upper() for sersno in sersnos]
     if not ids or any(not re.fullmatch(r"[A-Z0-9]{14}", sersno) for sersno in ids):
         raise RpxError("請提供 14 碼英數報單號碼")
-    cache = cache or os.environ.get("FUELCORE_REPORT_CACHE") or (
-        Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "fuelcore" / "report-backgrounds")
-    cache = safe_destination(cache, assets)
     front, back = assets.page("N5203.Rpt"), assets.page("N5203CUS.Rpt")
     pages, fronts, warnings = [], [], []
     with closing(Database(settings, connection, read_only=True)) as db:
@@ -105,6 +99,16 @@ def prepare_report(settings, sersnos, *, reports=None, cache=None, connection=No
             pages.extend(((front_page, False), (back_page, True)))
             fronts.append(front_page)
     return ReportBatch(ids, assets, cache, pages, fronts, warnings)
+
+
+def report_resources(reports=None, cache=None):
+    reports = reports or os.environ.get("FUELCORE_CBS_REPORTS")
+    if not reports:
+        raise RpxError("請將 FUELCORE_CBS_REPORTS 指向本機 CBS 報表資料夾")
+    assets = ReportAssets(reports)
+    cache = cache or os.environ.get("FUELCORE_REPORT_CACHE") or (
+        Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "fuelcore" / "report-backgrounds")
+    return assets, safe_destination(cache, assets)
 
 
 def render_report(settings, sersnos, output, *, reports=None, cache=None, connection=None):

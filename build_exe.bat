@@ -20,8 +20,8 @@ if not exist "%VENV_PY%" (
 set "STEP=Check for 64-bit Python 3.11 or newer"
 "%VENV_PY%" -c "import struct,sys; sys.exit(0 if sys.version_info >= (3,11) and struct.calcsize('P') == 8 else 1)" || goto :fail
 
-set "STEP=Install PyInstaller and PyMySQL"
-"%VENV_PY%" -m pip install "pyinstaller>=6,<7" "pymysql>=1,<2" || goto :fail
+set "STEP=Install PyInstaller and fuelcore dependencies"
+"%VENV_PY%" -m pip install "pyinstaller>=6,<7" ".[mysql,report]" || goto :fail
 
 set "STEP=Build fuelcore.exe and fuelcore_cli.exe"
 "%VENV_PY%" -m PyInstaller --noconfirm --clean --distpath dist ^

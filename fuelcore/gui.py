@@ -6,6 +6,7 @@ from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
 
 from .convert import convert_file
+from .report_view import ReportPage
 from .settings import Settings
 from .workbench import (
     DB_FIELDS, DEFAULTS, FAILED, IMPORTED, PATH_FIELDS, PENDING, UNREADABLE,
@@ -33,7 +34,8 @@ TITLE = (FONT[0], 17, "bold")
 def configure_styles(root):
     style = ttk.Style(root)
     style.theme_use("clam")
-    root.option_add("*Font", FONT)
+    for widget in ("Text", "TEntry", "TCombobox", "TCombobox*Listbox"):
+        root.option_add(f"*{widget}.font", FONT)
     style.configure(".", font=FONT, foreground=TEXT, background=BACKGROUND)
     style.configure("Card.TFrame", background=WHITE, bordercolor=FRAME, borderwidth=1, relief="solid")
     style.configure("Card.TLabel", background=WHITE)
@@ -129,7 +131,8 @@ class Workbench:
         body.grid(row=0, column=1, sticky="nsew")
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
-        for name, build in (("轉檔", self.build_convert_page), ("設定", self.build_settings_page)):
+        for name, build in (("轉檔", self.build_convert_page), ("報單列印", self.build_report_page),
+                            ("設定", self.build_settings_page)):
             item = ttk.Frame(sidebar, style="Nav.TFrame")
             item.pack(fill="x", pady=2)
             indicator = ttk.Frame(item, style="Nav.TFrame", width=4)
@@ -159,10 +162,13 @@ class Workbench:
             indicator.configure(style="Accent.TFrame" if key == name else "Nav.TFrame")
             button.configure(style="Current.Nav.TButton" if key == name else "Nav.TButton")
 
+    def build_report_page(self, page):
+        self.report_page = ReportPage(self, page)
+
     def build_convert_page(self, page):
         page.columnconfigure(0, weight=1)
-        page.rowconfigure(1, weight=3)
-        page.rowconfigure(2, weight=2)
+        page.rowconfigure(1, weight=5)
+        page.rowconfigure(2, weight=1)
         ttk.Label(page, text="轉檔", style="Title.TLabel").grid(sticky="w", pady=(0, 12))
         source = ttk.Frame(page, style="Card.TFrame", padding=14)
         source.grid(row=1, column=0, sticky="nsew", pady=(0, 12))
@@ -183,10 +189,11 @@ class Workbench:
         self.show_all_button.pack(side="left", padx=(12, 0))
         ttk.Label(bar, textvariable=self.summary, style="Hint.TLabel").pack(side="right", padx=8)
         panel, self.files = make_table(source, (
-            ("name", "檔名", 240, True), ("folder", "日期資料夾", 150, True),
+            ("name", "檔名", 240, True), ("folder", "日期資料夾", 116, False),
             ("sersno", "報單號碼", 165, False), ("status", "狀態", 103, False),
         ), "extended")
         panel.grid(sticky="nsew")
+        self.files.configure(height=7)
         self.files.bind("<<TreeviewSelect>>", lambda _: self.update_buttons())
 
         log = ttk.Frame(page, style="Card.TFrame", padding=14)
@@ -198,6 +205,7 @@ class Workbench:
             ("time", "時間", 95, False), ("kind", "類別", 80, False), ("message", "內容", 420, True),
         ))
         panel.grid(sticky="nsew")
+        self.logs.configure(height=2)
         details = ttk.Label(log, textvariable=self.log_detail, style="Hint.TLabel")
         details.grid(sticky="ew", pady=(4, 0))
         log.bind("<Configure>", lambda event: details.configure(wraplength=max(event.width - 32, 100)))
@@ -401,7 +409,7 @@ class Workbench:
         for button in [self.add_button, self.refresh_button, self.show_all_button, *self.setting_actions]:
             button.state(["disabled" if self.busy else "!disabled"])
 
-    def run_task(self, title, work, finish):
+    def run_task(self, title, work, finish, on_error=None):
         if self.busy:
             return
         self.busy = True
@@ -412,7 +420,7 @@ class Workbench:
             try:
                 result = work()
             except Exception as error:
-                self.events.put(("error", str(error)))
+                self.events.put(("error", (str(error), on_error)))
             else:
                 self.events.put(("done", (finish, result)))
 
@@ -430,9 +438,12 @@ class Workbench:
             self.busy = False
             self.task_status.set("就緒")
             if kind == "error":
-                self.add_log("失敗", value)
-                self.show_feedback(value, error=True)
+                message, on_error = value
+                self.add_log("失敗", message)
+                self.show_feedback(message, error=True)
                 self.task_status.set("作業失敗，請查看紀錄或設定頁。")
+                if on_error is not None:
+                    on_error(message)
             else:
                 finish, result = value
                 finish(result)

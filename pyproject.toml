@@ -9,7 +9,7 @@ requires-python = ">=3.8"
 
 [project.optional-dependencies]
 mysql = ["PyMySQL>=1.0.2,<2"]
-report = ["Pillow>=10,<14", "reportlab>=4,<5", "pypdfium2>=4,<6"]
+report = ["Pillow>=10,<14", "reportlab>=4,<5", "pypdfium2>=4,<6", "openpyxl>=3.1,<4"]
 
 [tool.setuptools.package-data]
 fuelcore = ["schema.csv"]
