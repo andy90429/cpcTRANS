@@ -9,7 +9,13 @@ from fuelcore.schema import SCHEMA, init_sqlite, statements
 
 
 def main():
-    prog = "fuelcore.exe" if getattr(sys, "frozen", False) else "python -m fuelcore"
+    if sys._xoptions.get("fuelcore_gui"):
+        folder = Path(sys.executable).parent
+        if len(sys.argv) > 1:
+            return forward_cli(folder)
+        from fuelcore.gui import run
+        return run(folder / "fuelcore.ini")
+    prog = Path(sys.executable).name if getattr(sys, "frozen", False) else "python -m fuelcore"
     parser = argparse.ArgumentParser(prog=prog)
     commands = parser.add_subparsers(dest="command", required=True)
     convert = commands.add_parser("convert")
@@ -31,7 +37,21 @@ def main():
             else:
                 print(sql, end="")
         return 0
-    results = convert_files(args.txt, settings)
+    return run_conversion(args.txt, settings)
+
+
+def forward_cli(folder):
+    import ctypes
+    import subprocess
+
+    # The windowed entry point has no console. Reuse the caller's console or pipes.
+    ctypes.windll.kernel32.AttachConsole(-1)
+    command = [str(folder / "fuelcore_cli.exe"), *sys.argv[1:]]
+    return subprocess.call(command, close_fds=False)
+
+
+def run_conversion(paths, settings):
+    results = convert_files(paths, settings)
     for result in results:
         print(json.dumps(asdict(result), ensure_ascii=False))
     failures = sum(not result.ok for result in results)

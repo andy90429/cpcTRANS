@@ -3,5 +3,5 @@ __pycache__/
 build/
 dist/
 .venv_build/
-fuelcore.ini
+*.[iI][nN][iI]
 *.sqlite3

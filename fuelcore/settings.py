@@ -4,6 +4,19 @@ import re
 from pathlib import Path
 
 
+def read_config(path):
+    path = Path(path).resolve()
+    if path.name.casefold() in {"txtrans.ini", "cpctrans.ini"}:
+        raise ValueError(f"請使用 fuelcore 的設定檔：{path}")
+    config = configparser.ConfigParser(interpolation=None)
+    with path.open(encoding="utf-8-sig") as stream:
+        try:
+            config.read_file(stream)
+        except configparser.Error as error:
+            raise ValueError(f"INI 格式錯誤：{path}") from error
+    return config
+
+
 class Settings:
     def __init__(self, config, base):
         db = config["database"]
@@ -38,7 +51,4 @@ class Settings:
     @classmethod
     def load(cls, path):
         path = Path(path).resolve()
-        config = configparser.ConfigParser(interpolation=None)
-        with path.open(encoding="utf-8-sig") as stream:
-            config.read_file(stream)
-        return cls(config, path.parent)
+        return cls(read_config(path), path.parent)

@@ -55,6 +55,13 @@ def read_txt(path):
     return header, items
 
 
+def declaration_number(header):
+    sersno = header[1]
+    if len(sersno) != 14:
+        raise ValueError("報單號碼必須是 14 碼")
+    return sersno
+
+
 def number(value):
     numeric = Decimal(value)
     if not numeric.is_finite():
@@ -203,8 +210,7 @@ def convert_file(path, settings, connection=None):
     try:
         header, items = read_txt(path)
         result.sersno = header[1]
-        if len(result.sersno) != 14:
-            raise ValueError("報單號碼必須是 14 碼")
+        declaration_number(header)
         transact(header, items, settings, result.notes, connection)
         result.ok = True
     except Exception as error:

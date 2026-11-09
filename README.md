@@ -32,16 +32,34 @@ build_exe.bat
 build_check.bat
 ```
 
-`build_exe.bat` 在專案內建立或沿用 `.venv_build`，安裝打包套件，產生 `dist\fuelcore\fuelcore.exe` 和 `dist\fuelcore.zip`。如果 Python 不在 PATH，可以先將 `FUELCORE_BUILD_PYTHON` 設為 Python 執行檔的完整路徑。
+`build_exe.bat` 在專案內建立或沿用 `.venv_build`，安裝打包套件，產生 `dist\fuelcore.zip`。ZIP 包含 `fuelcore.exe`、`fuelcore_cli.exe` 和共用的 `_internal` 目錄。如果 Python 不在 PATH，可以先將 `FUELCORE_BUILD_PYTHON` 設為 Python 執行檔的完整路徑。建置用的 Python 須包含 Tkinter。
 
 `build_check.bat` 將 ZIP 解到新的暫存資料夾，從範例建立設定，用 EXE 建立 SQLite 測試庫並轉換 `資料\txt樣本` 內的所有 TXT，最後列出成功及失敗數。樣本在專案外時，可以執行 `build_check.bat "C:\路徑\txt樣本"`。
 
-在沒有安裝 Python 的 Windows 上試跑時，請完整解壓縮 ZIP，保留 `fuelcore.exe` 旁的 `_internal` 目錄。在解壓後的 `fuelcore` 資料夾執行：
+## 視窗操作
+
+完整解壓縮 ZIP 後，雙擊 `fuelcore.exe` 開啟視窗。測試機無須安裝 Python。第一次可在「設定」選擇 TXT 來源目錄與 CBSAPP 目錄，再按「儲存設定」。程式將設定寫入 EXE 同層的 `fuelcore.ini`。INI 的相對路徑以 INI 所在目錄為起點。
+
+```ini
+[paths]
+txt_path = C:\NCBS\TxTrans中油\TXT
+cbsapp_path = C:\NCBS\CBSAPP
+```
+
+儲存後會自動重新掃描。按「重新整理」會重新讀取 `fuelcore.ini` 的 `txt_path`。預設會掃描最近 60 個日曆日（含今天）的 `YYYYMMDD` 日期資料夾，勾選「顯示全部」可掃描更早的資料夾。`.txt` 與 `.TXT` 都會列出。清單預選未轉入的檔案，無法讀取的檔案會個別標記並將原因寫入作業紀錄。
+
+可用 Ctrl 或 Shift 調整選取，或按「加入其他檔案…」。轉檔完成後可在作業紀錄查看每筆結果，選取紀錄可閱讀完整文字。
+
+未另存設定時使用附帶的 SQLite 測試設定，首次轉檔會建庫。CBSAPP 目錄用來確認 `CBSAPP.exe` 的位置。要在 CBSAPP 裡查到結果，兩邊需連到同一套 MySQL 測試庫。
+
+## 封包命令列
+
+在解壓後的 `fuelcore` 資料夾執行。`fuelcore.exe` 帶參數時也會轉交相同的命令。若要讓命令提示字元等待完成或讓腳本取得退出碼，請直接用 `fuelcore_cli.exe`。
 
 ```bat
 copy fuelcore.ini.example fuelcore.ini
-fuelcore.exe schema --config fuelcore.ini
-fuelcore.exe convert "C:\路徑\D4122_TEST_0001.txt" --config fuelcore.ini
+fuelcore_cli.exe schema --config fuelcore.ini
+fuelcore_cli.exe convert "C:\路徑\D4122_TEST_0001.txt" --config fuelcore.ini
 ```
 
 ## MySQL 測試庫

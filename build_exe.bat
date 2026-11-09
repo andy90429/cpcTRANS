@@ -23,11 +23,9 @@ set "STEP=Check for 64-bit Python 3.11 or newer"
 set "STEP=Install PyInstaller and PyMySQL"
 "%VENV_PY%" -m pip install "pyinstaller>=6,<7" "pymysql>=1,<2" || goto :fail
 
-set "STEP=Build fuelcore.exe"
-"%VENV_PY%" -m PyInstaller --noconfirm --clean --onedir --console --name fuelcore ^
-    --paths "%CD%" --add-data "%CD%\fuelcore\schema.csv:fuelcore" ^
-    --distpath dist --workpath build\pyinstaller --specpath build ^
-    --python-option "X utf8" fuelcore\__main__.py || goto :fail
+set "STEP=Build fuelcore.exe and fuelcore_cli.exe"
+"%VENV_PY%" -m PyInstaller --noconfirm --clean --distpath dist ^
+    --workpath build\pyinstaller fuelcore.spec || goto :fail
 
 set "STEP=Copy sample configuration and README"
 copy /y "fuelcore.ini.example" "dist\fuelcore\fuelcore.ini.example" >nul || goto :fail
@@ -41,7 +39,7 @@ powershell.exe -NoProfile -NonInteractive -Command ^
     "try { [IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $dist 'fuelcore'), $zip, 'Optimal', $true); Move-Item -LiteralPath $zip -Destination (Join-Path $dist 'fuelcore.zip') -Force }" ^
     "finally { if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip } }" || goto :fail
 
-echo Built dist\fuelcore\fuelcore.exe and dist\fuelcore.zip
+echo Built dist\fuelcore\fuelcore.exe, dist\fuelcore\fuelcore_cli.exe and dist\fuelcore.zip
 popd
 exit /b 0
 

@@ -22,9 +22,9 @@ powershell.exe -NoProfile -NonInteractive -Command ^
     "    Push-Location -LiteralPath $bundle;" ^
     "    try {" ^
     "        Copy-Item -LiteralPath 'fuelcore.ini.example' -Destination 'fuelcore.ini';" ^
-    "        & '.\fuelcore.exe' schema --config 'fuelcore.ini';" ^
+    "        & '.\fuelcore_cli.exe' schema --config 'fuelcore.ini';" ^
     "        if ($LASTEXITCODE -ne 0) { throw ('schema failed: ' + $LASTEXITCODE) };" ^
-    "        & '.\fuelcore.exe' convert @paths --config 'fuelcore.ini';" ^
+    "        & '.\fuelcore_cli.exe' convert @paths --config 'fuelcore.ini';" ^
     "        if ($LASTEXITCODE -ne 0) { throw ('convert failed: ' + $LASTEXITCODE) };" ^
     "    } finally { Pop-Location };" ^
     "} finally {" ^
