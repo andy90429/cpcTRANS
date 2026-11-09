@@ -108,6 +108,22 @@ MySQL 匯入需先準備測試庫的回覆表、`RcvMsgRcds` 及只有一筆資�
 
 送信的兩份標準 XML 已在假報單 CSV 的 `SLNAME`、`SLADDR`、`SLCNAME`、`SLCADDR` 匿名化後重新產生。產生時用 `tests/test_edi.py` 的 `load_fixture_tables` 將假資料載入記憶體 SQLite，再用 `XmlSettings.load(Database(...))` 讀取本機 CBS 設定，最後將 `SendXmlBuilder.xml_bytes` 的結果直接寫入 `tests/fixtures/edi/expected/send/`。
 
+## 報單 Rpx 與 PDF 預覽
+
+從專案根目錄安裝列印所需套件。MySQL 環境可一併安裝 `.[mysql,report]`。
+
+```powershell
+python -m pip install ".[report]"
+$env:FUELCORE_CBS_REPORTS = 'C:\fuelcore_local\搬移包_列印\只放本機_CBS報表'
+python -m fuelcore render-report TEST00A10E0777 TEST00A10E0781 --config fuelcore.ini --output .\列印輸出
+```
+
+報表目錄須提供 `N5203.Rpt`、`N5203CUS.Rpt` 和範本的 `PictureFile` 指定的 BMP。程式依既有 INI 以 SELECT 讀取測試庫。報單未填通關方式時，會在可用的 EDI 測試庫查找 N5107／N5204 的通關方式，不必等放行日期。輸出目錄每次建立一個批次資料夾，含每張報單一個 TPF0 正面的 Rpx、每張正面接背面查驗表的 PDF，以及逐頁 PNG。
+
+600 dpi 一位元底圖預設快取於 `%LOCALAPPDATA%\fuelcore\report-backgrounds`，可用 `FUELCORE_REPORT_CACHE` 指定其他本機位置。背面延用舊版的 180 度方向。若缺少指定字型，程式使用可用字型並列出提醒。過長明細超出單張正面可用範圍時，程式會提示該報單。`參考輸出` 內如有同報單的 Rpx，批次資料夾會另外產生 `比對差異.txt`。
+
+`tests/test_report.py` 會在測試期間產生假範本。設定 `FUELCORE_CBS_REPORTS` 後，也會驗證本機範本及用兩張假報單產生 PDF。
+
 ## 驗證與產生測試檔
 
 ```powershell

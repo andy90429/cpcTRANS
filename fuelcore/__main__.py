@@ -36,8 +36,26 @@ def main():
         receive.add_argument("--config", default="fuelcore.ini")
         if command == "simulate-receive":
             receive.add_argument("--output", type=Path, default=Path("."))
+    report = commands.add_parser("render-report", help="產生唯讀報單 Rpx、PDF 與逐頁 PNG")
+    report.add_argument("sersno", nargs="+")
+    report.add_argument("--config", required=True)
+    report.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     settings = Settings.load(args.config)
+    if args.command == "render-report":
+        from fuelcore.report import render_report
+        from fuelcore.report.rpx import RpxError
+        try:
+            result = render_report(settings, args.sersno, args.output)
+        except (RpxError, OSError) as error:
+            print(error, file=sys.stderr)
+            return 1
+        for path in [result.rpx, result.pdf, *result.previews, result.comparison]:
+            if path:
+                print(path)
+        for warning in result.warnings:
+            print(f"提醒：{warning}", file=sys.stderr)
+        return 0
     if args.command == "simulate-send":
         from fuelcore.edi import simulate_send
         result = simulate_send(settings, args.sersno, args.output)
