@@ -72,6 +72,7 @@ class Settings:
         self.products = {key.upper(): json.loads(value)
                          for key, value in config["products"].items()}
         self.edi = EdiSettings.from_section(config["edi"]) if config.has_section("edi") else None
+        self.printer = config.get("print", "printer", fallback="").strip()
 
     @classmethod
     def load(cls, path):

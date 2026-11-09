@@ -234,6 +234,20 @@ def is_separator(field):
     return bool(re.fullmatch(r"-{3,}", field.text("Caption").strip()))
 
 
+def fit_total_slots(fields):
+    for field in fields:
+        expression = (field.text("Field") or field.text("PrtConditions")).upper()
+        source = field.text("SourceStr").upper()
+        if field.text("Alignment") == "taRightJustify" and (
+            source in {"SUMEXP", "SUMSTC"} or "SUMSTC.STCQUAN" in expression or expression == "TOT_NETWT"
+        ):
+            # These quantity slots start slightly left of the printed column rule.
+            inset = min(8, field.number("Width", 1) - 1)
+            if inset > 0:
+                field.set_number("Left", field.number("Left") + inset)
+                field.set_number("Width", field.number("Width") - inset)
+
+
 def pack_item(fields, y):
     visible = [field for field in fields if drawn(field)]
     labels = [field for field in visible if not is_separator(field)]
@@ -284,6 +298,7 @@ def build_page(template, tables, warnings):
     if len(items) == 1:
         item_block = [fill_field(deepcopy(field), context, warnings) for field in item_fields]
         totals = [fill_field(deepcopy(field), context, warnings) for field in total_fields]
+        fit_total_slots(totals)
         item_bottom = max((field.number("Top") + content_height(field) for field in item_block if drawn(field)), default=0)
         totals_top = min((field.number("Top") for field in totals if drawn(field)), default=footer)
         if item_bottom <= totals_top:
@@ -300,6 +315,7 @@ def build_page(template, tables, warnings):
         visible, y = pack_item(block, y)
         packed.extend(visible)
     totals = [fill_field(deepcopy(field), context, warnings) for field in total_fields]
+    fit_total_slots(totals)
     for top in sorted({field.number("Top") for field in totals if drawn(field)}):
         line = [field for field in totals if drawn(field) and field.number("Top") == top]
         for field in line:

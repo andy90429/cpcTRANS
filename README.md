@@ -124,6 +124,24 @@ python -m fuelcore render-report TEST00A10E0777 TEST00A10E0781 --config fuelcore
 
 `tests/test_report.py` 會在測試期間產生假範本。設定 `FUELCORE_CBS_REPORTS` 後，也會驗證本機範本及用兩張假報單產生 PDF。
 
+### Windows GDI 直接列印
+
+先用 `list-printers` 查詢 Windows 上的名稱，再填入本機 `fuelcore.ini`。
+
+```ini
+[print]
+printer = FX DocuCentre-V 3065 PCL 6
+```
+
+```powershell
+python -m fuelcore list-printers
+python -m fuelcore print-report TEST00A10E0777 TEST00A10E0781 --config fuelcore.ini
+```
+
+`print-report` 列出報單、頁數、印表機及雙面模式。輸入 `y` 才送出，`--yes` 可略過確認。多張報單走同一個 GDI 列印工作，依序正面接背面。支援雙面時設定長邊翻頁。驅動程式未回報雙面能力時顯示單面提醒。設定空白或名稱不符時列出可用印表機並停止。
+
+`render-report` 仍可產生 PDF 預覽。兩個命令共用文字排版、條碼、虛線及一位元底圖。預覽輸出保留七天，清理只處理有 fuelcore 所有權標記、且內容只有預期輸出檔的批次。既有未標記資料夾保留。
+
 ## 驗證與產生測試檔
 
 ```powershell

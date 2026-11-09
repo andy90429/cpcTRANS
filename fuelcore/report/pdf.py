@@ -1,27 +1,17 @@
 import hashlib
 import io
-import math
 import os
-import re
 import zlib
 from contextlib import closing
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
-from PIL import Image, ImageFilter
-from reportlab.graphics.barcode.code39 import Standard39
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont, TTFError
 from reportlab.pdfgen.canvas import Canvas
 
-from .layout import field_lines, font_height, units
-from .rpx import RpxError
-
-
-FONT_ALIASES = {"華康儷粗黑": "DFLiHei-Bd", "華康儷中黑": "DFLiHei-Md", "華康粗黑體": "DFHei-Bd",
-                "華康中黑體": "DFHei-Md", "細明體": "MingLiU", "新細明體": "MingLiU", "標楷體": "DFKai-SB"}
-CM = 72 / 2.54
+from .drawing import draw_fields, prepare_pages
+from .layout import FONT_ALIASES, units
 
 
 def font_inventory(assets):
@@ -82,41 +72,55 @@ class FontMap:
             self.warnings.append(warning)
 
 
-def page_dimensions(page):
-    pixels = page.number("Width", 794), page.number("Height", 1123)
-    points = (page.number("PageWidth", 0) * CM or pixels[0] * 0.75,
-              page.number("PageHeight", 0) * CM or pixels[1] * 0.75)
-    if not all(math.isfinite(n) and 0 < n <= 5000 for n in (*pixels, *points)):
-        raise RpxError("報表頁面尺寸無效")
-    return pixels, points
+class PdfPainter:
+    def __init__(self, canvas, height, fonts):
+        self.canvas = canvas
+        self.height = height
+        self.fonts = fonts
 
+    def font(self, family, styles, text, size):
+        return self.fonts.get(family, styles, text), size
 
-def clear_background(source, points, cache):
-    data = source.read_bytes()
-    size = tuple(round(value * 600 / 72) for value in points)
-    if size[0] * size[1] > 100_000_000:
-        raise RpxError("600 dpi 底圖尺寸過大")
-    key = hashlib.sha256(data + f":{size}:600:unsharp-2-180-2:threshold-180:v1".encode()).hexdigest()
-    cache.mkdir(parents=True, exist_ok=True)
-    dest = cache / f"{key}.png"
-    if dest.is_file():
-        with Image.open(dest) as cached:
-            if cached.mode == "1" and cached.size == size:
-                return cached.copy()
-    with Image.open(io.BytesIO(data)) as original:
-        grey = original.convert("L").resize(size, Image.Resampling.LANCZOS)
-    crisp = grey.filter(ImageFilter.UnsharpMask(radius=2, percent=180, threshold=2))
-    bitmap = crisp.point([0] * 180 + [255] * 76, "1")
-    temp = None
-    try:
-        with NamedTemporaryFile(dir=cache, suffix=".png", delete=False) as handle:
-            temp = Path(handle.name)
-            bitmap.save(handle, format="PNG", dpi=(600, 600))
-        temp.replace(dest)
-    finally:
-        if temp and temp.exists():
-            temp.unlink()
-    return bitmap
+    def measure(self, font, text):
+        name, size = font
+        return pdfmetrics.stringWidth(text, name, size)
+
+    def baseline(self, font, size):
+        ascent, descent = pdfmetrics.getAscentDescent(*font)
+        return ascent + (size - ascent + descent) / 2
+
+    def clip(self, box):
+        if box is not None:
+            x, y, width, height = box
+            path = self.canvas.beginPath()
+            path.rect(x, self.height - y - height, width, height)
+            self.canvas.clipPath(path, stroke=0, fill=0)
+
+    def text(self, font, value, x, y, scale, cell, clip):
+        canvas = self.canvas
+        canvas.saveState()
+        self.clip(clip)
+        canvas.translate(x, self.height - y)
+        canvas.scale(scale, 1)
+        canvas.setFont(*font)
+        if cell:
+            position = 0
+            for char in value:
+                advance = units(char) * cell
+                if not char.isspace():
+                    canvas.drawCentredString(position + advance / 2, 0, char)
+                position += advance
+        else:
+            canvas.drawString(0, 0, value)
+        canvas.restoreState()
+
+    def rect(self, x, y, width, height, *, clip=None):
+        if clip:
+            self.canvas.saveState()
+            self.clip(clip)
+        self.canvas.rect(x, self.height - y - height, width, height, stroke=0, fill=1)
+        if clip:
+            self.canvas.restoreState()
 
 
 def background(canvas, bitmap, width, height):
@@ -127,115 +131,24 @@ def background(canvas, bitmap, width, height):
                       f"ID\n{data}>\nEI\nQ")
 
 
-def text_box(canvas, field, page_height, fonts):
-    text = field.text("Caption")
-    left, top = field.number("Left"), field.number("Top")
-    width, height = max(1, field.number("Width", 1)), max(1, field.number("Height", 1))
-    alignment, layout = field.text("Alignment"), field.text("Layout")
-    auto = field.boolean("AutoSize", True)
-    size = font_height(field)
-    family = field.text("Font.Name")
-    if "CODE39" in family.upper() or "BARCODE" in field.class_name.upper():
-        label = text.strip().upper().strip("*")
-        if not label or not re.fullmatch(r"[A-Z0-9 .\-$/+%]+", label):
-            raise RpxError(f"{field.name} 的 Code 39 含無效字元")
-        barcode = Standard39(label, barWidth=1, barHeight=height, ratio=2.5, checksum=0)
-        canvas.saveState()
-        canvas.translate(left, page_height - top - height)
-        canvas.scale(width / barcode.width, 1)
-        barcode.drawOn(canvas, 0, 0)
-        canvas.restoreState()
-        return
-    if re.fullmatch(r"-{3,}", text.strip()) or "line" in field.class_name.lower():
-        style = field.text("LineSet.Style")
-        canvas.setLineCap(0)
-        canvas.setLineWidth(1)
-        canvas.setDash([] if style == "psSolid" else [6, 3] if style == "psDash" else [3, 2])
-        y = page_height - top - height / 2
-        canvas.line(left, y, left + width, y)
-        return
-    if not text:
-        return
-    style = field.get("Font.Style")
-    styles = style.data if style and style.kind == 11 else ()
-    font = fonts.get(family, styles, text)
-    canvas.setFont(font, size)
-    lines = field_lines(field)
-    mono = family in {"細明體", "新細明體", "MingLiU", "PMingLiU"}
-    unit = math.ceil(size / 2)
-    # Preserve the fixed right edge of numeric form cells when a value is wider than the slot.
-    if mono and alignment == "taRightJustify" and all(re.fullmatch(r"[ ()+\-\d.,]*", line) for line in lines):
-        natural = max((units(line) * unit for line in lines), default=0)
-        if natural > width:
-            scale = width / natural
-            canvas.translate(left, 0)
-            canvas.scale(scale, 1)
-            left, width = 0, natural
-
-    def measure(line):
-        return units(line) * unit if mono else pdfmetrics.stringWidth(line, font, size)
-
-    text_height = len(lines) * size
-    if auto and mono:
-        height = text_height
-        if not field.boolean("WordWrap"):
-            fitted = max(map(measure, lines), default=0) or width
-            if alignment == "taRightJustify":
-                left += width - fitted
-            width = fitted
-    vertical = (height - text_height) / 2 if layout == "tlCenter" else height - text_height if layout == "tlBottom" else 0
-    ascent, descent = pdfmetrics.getAscentDescent(font, size)
-    offset = ascent + (size - ascent + descent) / 2
-    if not auto:
-        path = canvas.beginPath()
-        path.rect(left, page_height - top - height, width, height)
-        canvas.clipPath(path, stroke=0, fill=0)
-    for index, line in enumerate(lines):
-        line_width = measure(line)
-        x = left + (width - line_width if alignment == "taRightJustify" else (width - line_width) / 2 if alignment == "taCenter" else 0)
-        y = page_height - top - vertical - offset - index * size
-        if mono:
-            cursor = x
-            for char in line:
-                advance = units(char) * unit
-                if not char.isspace():
-                    canvas.drawCentredString(cursor + advance / 2, y, char)
-                cursor += advance
-        else:
-            canvas.drawString(x, y, line)
-        if "fsUnderline" in styles and line_width:
-            canvas.setDash([])
-            canvas.setLineWidth(0.6)
-            canvas.line(x, y - 1, x + line_width, y - 1)
-
-
 def render_pdf(pages, assets, cache, warnings):
     output = io.BytesIO()
     canvas = Canvas(output, pageCompression=1)
     canvas.setTitle("fuelcore 報單預覽")
     fonts = FontMap(assets, warnings)
-    bitmaps = {}
-    for page, reverse in pages:
-        (width, height), points = page_dimensions(page)
+    for page in prepare_pages(pages, assets, cache):
+        width, height = page.pixels
+        points = page.points
         canvas.setPageSize(points)
         canvas.saveState()
-        if reverse:
+        if page.reverse:
             canvas.translate(*points)
             canvas.rotate(180)
         canvas.scale(points[0] / width, points[1] / height)
-        picture = page.text("PictureFile").strip()
-        if picture:
-            key = (picture.casefold(), points)
-            if key not in bitmaps:
-                bitmaps[key] = clear_background(assets.find(picture), points, cache)
-            background(canvas, bitmaps[key], width, height)
-        for field in page.children:
-            if field.boolean("Visible", True) and field.boolean("isVisible", True):
-                canvas.saveState()
-                canvas.setFillColorRGB(0, 0, 0)
-                canvas.setStrokeColorRGB(0, 0, 0)
-                text_box(canvas, field, height, fonts)
-                canvas.restoreState()
+        canvas.setFillColorRGB(0, 0, 0)
+        if page.bitmap is not None:
+            background(canvas, page.bitmap, width, height)
+        draw_fields(PdfPainter(canvas, height, fonts), page)
         canvas.restoreState()
         canvas.showPage()
     canvas.save()

@@ -10,6 +10,9 @@ path = fuelcore_test.sqlite3
 ; database = fuelcore_test
 ; code_database = fuelcore_test_code
 
+[print]
+printer =
+
 [conversion]
 user_code = USER1
 cusboxno = Z000

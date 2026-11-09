@@ -2,6 +2,12 @@ import math
 import re
 
 
+CLOSING = ",.!?:;)]}，。、！？：；）］｝〉》」』】〕”’"
+WRAP_TOKENS = re.compile(rf"[{re.escape(CLOSING)}]+|[^\s\x80-\U0010ffff{re.escape(CLOSING)}]+|[^\x00-\x7f\s]|\s+")
+FONT_ALIASES = {"華康儷粗黑": "DFLiHei-Bd", "華康儷中黑": "DFLiHei-Md", "華康粗黑體": "DFHei-Bd",
+                "華康中黑體": "DFHei-Md", "細明體": "MingLiU", "新細明體": "MingLiU", "標楷體": "DFKai-SB"}
+
+
 def units(text):
     return sum(2 if ord(char) > 127 else 1 for char in text)
 
@@ -14,9 +20,15 @@ def wrap_lines(text, columns=None):
             continue
         line = ""
         first = True
-        for token in re.findall(r"[^\s\x80-\U0010ffff]+|[^\x00-\x7f\s]|\s+", paragraph):
+        for token in WRAP_TOKENS.findall(paragraph):
             if token.isspace():
                 if line or first:
+                    line += token
+                continue
+            if token[0] in CLOSING:
+                if not line and not first and out:
+                    out[-1] += token
+                else:
                     line += token
                 continue
             if line and units(line) + units(token) > columns:

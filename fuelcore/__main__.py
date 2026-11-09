@@ -40,8 +40,33 @@ def main():
     report.add_argument("sersno", nargs="+")
     report.add_argument("--config", required=True)
     report.add_argument("--output", type=Path, required=True)
+    print_cmd = commands.add_parser("print-report", help="以 Windows GDI 直接列印報單")
+    print_cmd.add_argument("sersno", nargs="+")
+    print_cmd.add_argument("--config", required=True)
+    print_cmd.add_argument("--yes", action="store_true", help="略過送印確認")
+    commands.add_parser("list-printers", help="列出 Windows 已安裝的印表機")
     args = parser.parse_args()
+    if args.command == "list-printers":
+        from fuelcore.report.printing import list_printers
+        from fuelcore.report.rpx import RpxError
+        try:
+            for name in list_printers():
+                print(name)
+        except (RpxError, OSError) as error:
+            print(error, file=sys.stderr)
+            return 1
+        return 0
     settings = Settings.load(args.config)
+    if args.command == "print-report":
+        from fuelcore.report.printing import print_report
+        from fuelcore.report.rpx import RpxError
+        try:
+            if print_report(settings, args.sersno, yes=args.yes):
+                print("已送出列印工作。")
+        except (RpxError, OSError) as error:
+            print(error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "render-report":
         from fuelcore.report import render_report
         from fuelcore.report.rpx import RpxError

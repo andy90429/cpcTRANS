@@ -7,6 +7,7 @@ from tempfile import mkdtemp
 
 from ..db import Database
 from .declaration import DeclarationReader, ReportAssets, build_page
+from .retention import cleanup_batches, mark_batch
 from .rpx import RpxDocument, RpxError
 
 
@@ -17,6 +18,16 @@ class ReportResult:
     previews: list
     warnings: list
     comparison: Path = None
+
+
+@dataclass(frozen=True)
+class ReportBatch:
+    ids: list
+    assets: ReportAssets
+    cache: Path
+    pages: list
+    fronts: list
+    warnings: list
 
 
 def safe_destination(path, assets):
@@ -71,13 +82,7 @@ def reference_comparison(assets, reports, warnings):
     return lines
 
 
-def render_report(settings, sersnos, output, *, reports=None, cache=None, connection=None):
-    try:
-        import pypdfium2  # noqa: F401  Check the PDF preview runtime before creating any outputs.
-        from .pdf import preview_pngs, render_pdf
-    except ImportError as error:
-        raise RpxError("請先安裝列印相依套件：python -m pip install .[report]") from error
-
+def prepare_report(settings, sersnos, *, reports=None, cache=None, connection=None):
     reports = reports or os.environ.get("FUELCORE_CBS_REPORTS")
     if not reports:
         raise RpxError("請將 FUELCORE_CBS_REPORTS 指向本機 CBS 報表資料夾")
@@ -85,7 +90,6 @@ def render_report(settings, sersnos, output, *, reports=None, cache=None, connec
     ids = [sersno.strip().upper() for sersno in sersnos]
     if not ids or any(not re.fullmatch(r"[A-Z0-9]{14}", sersno) for sersno in ids):
         raise RpxError("請提供 14 碼英數報單號碼")
-    output = safe_destination(output, assets)
     cache = cache or os.environ.get("FUELCORE_REPORT_CACHE") or (
         Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "fuelcore" / "report-backgrounds")
     cache = safe_destination(cache, assets)
@@ -100,12 +104,26 @@ def render_report(settings, sersnos, output, *, reports=None, cache=None, connec
             back_page = build_page(back, tables, warnings)
             pages.extend(((front_page, False), (back_page, True)))
             fronts.append(front_page)
-    pdf_bytes = render_pdf(pages, assets, cache, warnings)
-    rpx_bytes = RpxDocument.create(f"出口報單 {ids[0]}", fronts).to_bytes()
-    differences = reference_comparison(assets, dict(zip(ids, fronts)), warnings)
+    return ReportBatch(ids, assets, cache, pages, fronts, warnings)
+
+
+def render_report(settings, sersnos, output, *, reports=None, cache=None, connection=None):
+    try:
+        import pypdfium2  # noqa: F401  Check the PDF preview runtime before creating any outputs.
+        from .pdf import preview_pngs, render_pdf
+    except ImportError as error:
+        raise RpxError("請先安裝列印相依套件：python -m pip install .[report]") from error
+
+    batch = prepare_report(settings, sersnos, reports=reports, cache=cache, connection=connection)
+    output = safe_destination(output, batch.assets)
+    cleanup_batches(output)
+    pdf_bytes = render_pdf(batch.pages, batch.assets, batch.cache, batch.warnings)
+    rpx_bytes = RpxDocument.create(f"出口報單 {batch.ids[0]}", batch.fronts).to_bytes()
+    differences = reference_comparison(batch.assets, dict(zip(batch.ids, batch.fronts)), batch.warnings)
 
     output.mkdir(parents=True, exist_ok=True)
-    folder = Path(mkdtemp(prefix=f"報單_{ids[0]}_", dir=output))
+    folder = Path(mkdtemp(prefix=f"報單_{batch.ids[0]}_", dir=output))
+    mark_batch(folder)
     rpx, pdf = folder / "報單.Rpx", folder / "報單.pdf"
     rpx.write_bytes(rpx_bytes)
     pdf.write_bytes(pdf_bytes)
@@ -114,4 +132,4 @@ def render_report(settings, sersnos, output, *, reports=None, cache=None, connec
     if differences:
         comparison = folder / "比對差異.txt"
         comparison.write_bytes(("\r\n".join(differences) + "\r\n").encode("utf-8-sig"))
-    return ReportResult(rpx, pdf, previews, list(dict.fromkeys(warnings)), comparison)
+    return ReportResult(rpx, pdf, previews, list(dict.fromkeys(batch.warnings)), comparison)
