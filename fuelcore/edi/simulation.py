@@ -25,18 +25,18 @@ class SimulationResult:
     rejected: int
 
 
-def day_sequence(row, today):
-    previous = row_text(row, "OUTPUTDATE").strip()
+def day_sequence(row, today, direction="Output"):
+    previous = row_text(row, f"{direction.upper()}DATE").strip()
     if not previous:
         return 0
     match = re.match(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:$|[ T])", previous)
     if not match:
-        raise EdiError("sequence.OutputDate 格式不正確")
+        raise EdiError(f"sequence.{direction}Date 格式不正確")
     if date(*(int(part) for part in match.groups())) != today:
         return 0
-    current = int(row_text(row, "OUTPUTSEQUENCE") or "0")
+    current = int(row_text(row, f"{direction.upper()}SEQUENCE") or "0")
     if not 0 <= current <= 9999:
-        raise EdiError("sequence.OutputSequence 超出 4 碼日序號範圍")
+        raise EdiError(f"sequence.{direction}Sequence 超出 4 碼日序號範圍")
     return current
 
 

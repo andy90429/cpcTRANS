@@ -63,10 +63,10 @@
     </Consignment>
     <Exporter>
       <ID>03707901</ID>
-      <Name>CPC CORPORATION. TAIWAN</Name>
+      <Name>TEST COMPANY</Name>
       <tw_TypeCode>58</tw_TypeCode>
       <Address>
-        <Line>No.2 Zuo Nan Road,Nannan Distrist, Nanzi District,Kaohsiung,TAIWAN,R.O.C.</Line>
+        <Line>TEST ADDRESS</Line>
       </Address>
     </Exporter>
     <GovernmentAgencyGoodsItem>

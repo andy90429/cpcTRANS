@@ -65,10 +65,10 @@ class Database:
             cursor.execute(sql.replace("?", "%s") if self.mysql else sql, params)
             return cursor.lastrowid
 
-    def insert(self, table, values):
+    def insert(self, table, values, *, schema=None):
         columns = ", ".join(map(identifier, values))
         markers = ", ".join("?" for _ in values)
-        return self.execute(f"INSERT INTO {self.table(table)} ({columns}) VALUES ({markers})",
+        return self.execute(f"INSERT INTO {self.table(table, schema)} ({columns}) VALUES ({markers})",
                             tuple(values.values()))
 
     def begin(self):
@@ -81,10 +81,16 @@ class Database:
             return
         tables = [(self.settings.database, table) for table in read_schema()]
         tables.extend((self.settings.code_database, table) for table in CODE_TABLES)
+        self.require_transactional_tables(tables)
+
+    def require_transactional_tables(self, tables):
+        if not self.mysql or not tables:
+            return
+        schemas = sorted({schema for schema, _ in tables})
+        markers = ", ".join("?" for _ in schemas)
         rows = self.select(
             "SELECT TABLE_SCHEMA, TABLE_NAME, ENGINE FROM information_schema.TABLES "
-            "WHERE TABLE_SCHEMA IN (?, ?)",
-            (self.settings.database, self.settings.code_database),
+            f"WHERE TABLE_SCHEMA IN ({markers})", schemas,
         )
         engines = {(schema, table): engine for schema, table, engine in rows}
         invalid = []

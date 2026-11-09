@@ -93,6 +93,21 @@ python -m fuelcore simulate-send TEST00A10E0777 TEST00A10E0781 --config fuelcore
 
 如需用本機 CSV 驗證，可將 `FUELCORE_CBS_CONFIG` 指向 repo 外的 `只放本機_CBS設定` 資料夾。此設定會覆蓋 XML 設定庫來源，報單與序號仍由測試資料庫讀取。未設定時，依賴這批 CSV 的測試會跳過。
 
+## 收信模擬與匯入
+
+兩個命令都接受一個以上的回覆檔或資料夾，依檔名處理。預設讀取目前目錄的 `fuelcore.ini`。只處理 N5107 和 N5204，並逐檔列出結果。遇到失敗時退出碼為 1。
+
+```powershell
+python -m fuelcore simulate-receive .\回覆 --config fuelcore.ini --output .\模擬輸出
+python -m fuelcore import-replies .\回覆 --config fuelcore.ini
+```
+
+先用 `simulate-receive` 查看 `模擬結果.txt` 裡的回覆欄位、日序號及 CUSDEC 變更。模擬只執行 SELECT。`import-replies` 每個檔案各用一個交易，成功後才更新 Input 日序號。依訊息類型及檔名略過已匯入的回覆，成功和失敗的檔案都留在原位。
+
+MySQL 匯入需先準備測試庫的回覆表、`RcvMsgRcds` 及只有一筆資料的 `sequence` 表。參與寫入的表須為 InnoDB。N5204 需要唯一一筆對應的 CUSDEC 報單，才能一起提交放行狀態與回覆紀錄。
+
+送信的兩份標準 XML 已在假報單 CSV 的 `SLNAME`、`SLADDR`、`SLCNAME`、`SLCADDR` 匿名化後重新產生。產生時用 `tests/test_edi.py` 的 `load_fixture_tables` 將假資料載入記憶體 SQLite，再用 `XmlSettings.load(Database(...))` 讀取本機 CBS 設定，最後將 `SendXmlBuilder.xml_bytes` 的結果直接寫入 `tests/fixtures/edi/expected/send/`。
+
 ## 驗證與產生測試檔
 
 ```powershell

@@ -48,11 +48,14 @@ class Node:
 
 
 class XmlSettings:
-    def __init__(self, content, starts, relations):
+    def __init__(self, content, starts, relations, *, code=CODE, defaults=()):
+        self.code = code
+        default_rows = (upper_keys(row) for row in defaults)
+        self.defaults = [row for row in default_rows if row.get("PSETUPCODE") == code]
         mapping = {}
         for raw in starts:
             row = upper_keys(raw)
-            if row.get("PSETUPCODE") == CODE:
+            if row.get("PSETUPCODE") == code:
                 key = (row["PSTARTNODE"], int(row.get("PSTARTSEQUENCE") or 1))
                 mapping[key] = row["PTABLENAME"].upper()
         self.parents = {}
@@ -61,24 +64,24 @@ class XmlSettings:
             if row_text(row, "PDATABASE").upper() == "CBSDATA":
                 self.parents[row["PFOREIGNTABLENAME"].upper()] = row["PPRIMARYTABLENAME"].upper()
         rows = (upper_keys(row) for row in content)
-        rows = sorted((row for row in rows if row.get("PSETUPCODE") == CODE),
+        rows = sorted((row for row in rows if row.get("PSETUPCODE") == code),
                       key=lambda row: numeric(row.get("PORDER")))
-        self.root = self.build_tree(rows, mapping)
+        self.root = self.build_tree(rows, mapping, code)
 
     @classmethod
-    def from_csv(cls, folder):
+    def from_csv(cls, folder, *, code=CODE):
         def read(table):
             path = Path(folder) / f"xmlsetcontent.{table}.csv"
             with path.open(encoding="utf-8-sig", newline="") as stream:
                 return list(csv.DictReader(stream))
 
-        return cls(*(read(table) for table in CONFIG_TABLES))
+        return cls.from_tables(read, code)
 
     @classmethod
-    def load(cls, db):
+    def load(cls, db, *, code=CODE):
         folder = os.environ.get("FUELCORE_CBS_CONFIG")
         if folder:
-            return cls.from_csv(folder)
+            return cls.from_csv(folder, code=code)
         schema = db.settings.edi.xmlset_database
         names = db.table_names(schema)
 
@@ -87,18 +90,24 @@ class XmlSettings:
                 raise EdiError(f"XML 設定缺少資料表 {schema}.{table}")
             return db.select_dicts(f"SELECT * FROM {db.table(names[table], schema)}")
 
-        return cls(*(read(table) for table in CONFIG_TABLES))
+        return cls.from_tables(read, code)
+
+    @classmethod
+    def from_tables(cls, read, code):
+        defaults = read("tb_definefieldvalue") if code != CODE else ()
+        return cls(*(read(table) for table in CONFIG_TABLES), code=code, defaults=defaults)
 
     @staticmethod
-    def build_tree(rows, mapping):
+    def build_tree(rows, mapping, code):
         stack = []
         root = None
         occurrences = Counter()
         for row in rows:
             name = row_text(row, "PXMLNAME")
             level = int(row.get("PLEVELS") or 0)
-            if not XML_NAME.fullmatch(name) or not 0 <= level <= len(stack):
-                raise EdiError(f"{CODE} XML 節點名稱或層級不正確：{name}")
+            parts = name.split("+") if code != CODE else [name]
+            if not all(XML_NAME.fullmatch(part) for part in parts) or not 0 <= level <= len(stack):
+                raise EdiError(f"{code} XML 節點名稱或層級不正確：{name}")
             stack = stack[:level]
             if level:
                 parent = stack[-1]
@@ -108,12 +117,13 @@ class XmlSettings:
                 node = Node(name, row, table=table)
                 parent.children.append(node)
             else:
-                if root is not None or name != "Declaration":
-                    raise EdiError(f"{CODE} XML 設定的根節點必須是 Declaration")
-                root = node = Node(name, row)
+                expected = "Declaration" if code == CODE else "Response"
+                if root is not None or name != expected:
+                    raise EdiError(f"{code} XML 設定的根節點必須是 {expected}")
+                root = node = Node(name, row, table=mapping.get((name, 1), ""))
             stack.append(node)
         if root is None:
-            raise EdiError(f"XML 轉換設定沒有 {CODE}")
+            raise EdiError(f"XML 轉換設定沒有 {code}")
         return root
 
 

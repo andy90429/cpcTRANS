@@ -29,6 +29,13 @@ def main():
     simulate.add_argument("sersno", nargs="+")
     simulate.add_argument("--config", required=True)
     simulate.add_argument("--output", type=Path, required=True)
+    for command, help_text in (("simulate-receive", "以唯讀方式規劃收信"),
+                               ("import-replies", "將回覆匯入測試庫")):
+        receive = commands.add_parser(command, help=help_text)
+        receive.add_argument("source", nargs="+", type=Path)
+        receive.add_argument("--config", default="fuelcore.ini")
+        if command == "simulate-receive":
+            receive.add_argument("--output", type=Path, default=Path("."))
     args = parser.parse_args()
     settings = Settings.load(args.config)
     if args.command == "simulate-send":
@@ -36,6 +43,16 @@ def main():
         result = simulate_send(settings, args.sersno, args.output)
         print(result.directory / "模擬結果.txt")
         return int(bool(result.rejected))
+    if args.command in ("simulate-receive", "import-replies"):
+        from fuelcore.edi import import_replies, simulate_receive
+        if args.command == "simulate-receive":
+            report, results = simulate_receive(settings, args.source, args.output)
+            print(report)
+        else:
+            results = import_replies(settings, args.source)
+        for result in results:
+            print(f"{result.status} {result.file.name} {result.reference or result.message}".rstrip())
+        return int(any(result.status == "失敗" for result in results))
     if args.command == "schema":
         if settings.driver == "sqlite":
             init_sqlite(settings, args.csv)
