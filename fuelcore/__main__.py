@@ -26,6 +26,9 @@ def main():
     convert.add_argument("--config", "--db", required=True)
     listing = commands.add_parser("list", help="列出設定的 TXT 來源目錄中所有待轉檔")
     listing.add_argument("--config", default="fuelcore.ini")
+    diagnose = commands.add_parser("diagnose", help="唯讀安裝診斷與舊版 Rpx 差異摘要")
+    diagnose.add_argument("--config", type=Path, default=Path("fuelcore.ini"))
+    diagnose.add_argument("--old-rpx", type=Path)
     schema = commands.add_parser("schema", help="建立 SQLite 或輸出 MySQL 測試建表 SQL")
     schema.add_argument("--config", required=True)
     schema.add_argument("--csv", type=Path, default=SCHEMA)
@@ -75,6 +78,10 @@ def main():
     agent.add_argument("--mapping", type=Path)
     agent.add_argument("--shorts", type=Path)
     args = parser.parse_args()
+    if args.command == "diagnose":
+        from fuelcore.diagnostics import collect_diagnostics
+        print(collect_diagnostics(args.config, args.old_rpx).summary, end="")
+        return 0
     if args.command == "convert" and (args.all == bool(args.txt)):
         convert.error("請指定 TXT 檔案或 --all，兩者只能擇一")
     if hasattr(args, "config"):

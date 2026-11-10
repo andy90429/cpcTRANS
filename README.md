@@ -36,6 +36,8 @@ build_check.bat
 
 `build_check.bat` 將 ZIP 解到新的暫存資料夾，從範例建立設定，用 EXE 建立 SQLite 測試庫並轉換 `資料\txt樣本` 內的所有 TXT，最後列出成功及失敗數。樣本在專案外時，可以執行 `build_check.bat "C:\路徑\txt樣本"`。
 
+上機後可用「工具 → 診斷（可比對舊版 Rpx）」檢查安裝環境，或選取舊版 Rpx 核對同一筆報單。需要分享結果時使用「複製可分享摘要」。也可執行 `fuelcore_cli.exe diagnose --config fuelcore.ini --old-rpx TEST.Rpx`。ZIP 隨附 `CPCtrans-comparison.md`。
+
 ## 視窗操作
 
 完整解壓縮 ZIP 後，雙擊 `fuelcore.exe` 開啟視窗。測試機無須安裝 Python。第一次可在「設定」選擇 TXT 來源目錄與 CBSAPP 目錄，再按「儲存設定」。程式將設定寫入 EXE 同層的 `fuelcore.ini`。INI 的相對路徑以 INI 所在目錄為起點。

@@ -163,6 +163,17 @@ def new_copy(folder, stem, suffix, content, assets, *, category=None):
         return path
 
 
+def rpx_number(page):
+    field = find_field(page.children, TOTAL_FIELDS["id"])
+    number = re.sub(r"[^A-Z0-9]", "", caption(field).upper())
+    if re.fullmatch(r"[A-Z0-9]{14}", number):
+        return number
+    match = re.search(r"\b[A-Z0-9]{14}\b", page.text("PageTitle").upper())
+    if not match:
+        raise RpxError("Rpx 正面缺少 14 碼報單號碼")
+    return match[0]
+
+
 @dataclass
 class EditableReport:
     batch: ReportBatch
@@ -190,14 +201,7 @@ class EditableReport:
         if not fronts:
             raise RpxError("Rpx 沒有報單頁面")
         for page in fronts:
-            id_field = find_field(page.children, TOTAL_FIELDS["id"])
-            report_id = re.sub(r"[^A-Z0-9]", "", caption(id_field).upper())
-            if not re.fullmatch(r"[A-Z0-9]{14}", report_id):
-                match = re.search(r"\b[A-Z0-9]{14}\b", page.text("PageTitle").upper())
-                if not match:
-                    raise RpxError("Rpx 正面缺少 14 碼報單號碼")
-                report_id = match[0]
-            ids.append(report_id)
+            ids.append(rpx_number(page))
             pages.extend(((page, False), (deepcopy(back), True)))
         if backup is not None:
             new_copy(Path(backup) / "原檔備份", path.stem, path.suffix, data, assets)

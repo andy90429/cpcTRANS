@@ -119,11 +119,15 @@ def page_differences(page, tables):
 
 
 def compare_report(report, settings, *, connection=None):
+    return compare_fronts(report.batch.ids, report.batch.fronts, settings, connection=connection)
+
+
+def compare_fronts(numbers, fronts, settings, *, connection=None):
     differences, warnings = [], []
     try:
         with closing(Database(settings, connection, read_only=True)) as db:
             reader = DeclarationReader(db, enrich=False)
-            for number, page in zip(report.batch.ids, report.batch.fronts):
+            for number, page in zip(numbers, fronts):
                 try:
                     tables = reader.read(number, compare=True)
                     differences.append(page_differences(page, tables))
@@ -131,5 +135,5 @@ def compare_report(report, settings, *, connection=None):
                     warnings.append(f"{number} 無法讀取對應的測試庫報單。")
                     differences.append(())
     except Exception:
-        return [()] * len(report.batch.ids), ["無法讀取測試庫，已開啟 Rpx 預覽。"]
+        return [()] * len(numbers), ["無法讀取測試庫，已開啟 Rpx 預覽。"]
     return differences, warnings

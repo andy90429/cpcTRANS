@@ -8,6 +8,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from .cert_check import CertificateError, check_pfx, expiry_date
 from .declare_rate import plan_rates, report_text, save_rates
+from .diagnostics import collect_diagnostics
 from .report.retention import mark_diagnostic
 from .settings import Settings
 from .workbench import config_source
@@ -25,6 +26,7 @@ class ToolsPage:
             ("每旬匯率（先模擬再更新）…", self.simulate_rates),
             ("從離線檔案模擬匯率…", self.select_rate_files),
             ("憑證檢查…", self.inspect_certificate),
+            ("診斷（可比對舊版 Rpx）…", self.diagnose),
         )):
             button = ttk.Button(actions, text=label, command=action)
             button.grid(row=row, column=0, sticky="w", pady=(0, 8))
@@ -77,17 +79,48 @@ class ToolsPage:
             self.app.run_task("正在更新匯率並讀回核對…", lambda: save_rates(settings, plan),
                               self.show_rate_result, self.rate_error)
 
-    def open_report(self, path, text):
+    def open_report(self, path, text, *, title="每旬匯率模擬報告", summary=None):
         window = tk.Toplevel(self.app.root)
-        window.title("每旬匯率模擬報告")
+        window.title(title)
         window.transient(self.app.root)
         ttk.Label(window, text=str(path), wraplength=700).pack(anchor="w", padx=12, pady=8)
         body = ScrolledText(window, width=88, height=20, wrap="word")
         body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         body.insert("1.0", text)
         body.configure(state="disabled")
-        ttk.Button(window, text="關閉", command=window.destroy).pack(pady=(0, 8))
+        actions = ttk.Frame(window)
+        actions.pack(pady=(0, 8))
+        if summary is not None:
+            def copy_summary():
+                window.clipboard_clear()
+                window.clipboard_append(summary)
+
+            ttk.Button(actions, text="複製可分享摘要", command=copy_summary).pack(side="left", padx=6)
+        ttk.Button(actions, text="關閉", command=window.destroy).pack(side="left")
         return window
+
+    def diagnose(self):
+        if self.app.busy:
+            return
+        choice = messagebox.askyesnocancel(
+            "上機診斷", "是否選擇舊版 Rpx，對照 fuelcore 測試庫？\n選「否」只檢查安裝環境。", parent=self.page,
+        )
+        if choice is None:
+            return
+        path = None
+        if choice:
+            path = filedialog.askopenfilename(title="選擇舊版 Rpx", parent=self.page,
+                                              filetypes=[("Rpx 報單", "*.rpx")])
+            if not path:
+                return
+
+        def ready(result):
+            text = result.summary
+            if result.details:
+                text += "\n本機欄位值（不包含在可分享摘要）\n" + result.details
+            self.open_report("唯讀診斷", text, title="上機診斷", summary=result.summary)
+
+        self.app.run_task("正在診斷…", lambda: collect_diagnostics(self.app.config_path, path), ready)
 
     def show_rate_result(self, count):
         messagebox.showinfo("每旬匯率", f"已寫入測試庫並讀回核對 {count} 筆匯率。", parent=self.page)

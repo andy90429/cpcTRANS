@@ -30,6 +30,7 @@ set "STEP=Build fuelcore.exe and fuelcore_cli.exe"
 set "STEP=Copy sample configuration and README"
 copy /y "fuelcore.ini.example" "dist\fuelcore\fuelcore.ini.example" >nul || goto :fail
 copy /y "README.md" "dist\fuelcore\README.md" >nul || goto :fail
+copy /y "docs\CPCtrans-comparison.md" "dist\fuelcore\CPCtrans-comparison.md" >nul || goto :fail
 
 set "STEP=Create dist\fuelcore.zip"
 powershell.exe -NoProfile -NonInteractive -Command ^
