@@ -1,9 +1,10 @@
+import hmac
 import queue
 import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, font, messagebox, ttk
+from tkinter import filedialog, font, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from .edi import simulate_send
@@ -11,7 +12,8 @@ from .logic_check import run_logic_check
 from .reply_view import ReplyPage
 from .report_view import ReportPage
 from .send_check import prepare, split_numbers
-from .settings import Settings
+from .settings import Settings, read_config
+from .settings_view import SettingsPages
 from .workbench import (
     DB_FIELDS, DEFAULTS, FAILED, IMPORTED, PATH_FIELDS, PENDING, UNREADABLE,
     check_summaries, config_source, convert_batch, edited_config, load_fields, resolve_folder,
@@ -110,6 +112,7 @@ class Workbench:
         self.nav = {}
         self.pages = {}
         self.setting_actions = []
+        self.settings_unlocked = False
         self.values = {key: tk.StringVar(value=DEFAULTS.get(key, "")) for key in (*PATH_FIELDS, *DB_FIELDS)}
         self.values["check_after_convert"] = tk.StringVar(value="yes")
         self.source_text = tk.StringVar(value="尚未指定 TXT 來源目錄")
@@ -160,6 +163,7 @@ class Workbench:
         try:
             for key, value in load_fields(self.config_path).items():
                 self.values[key].set(value)
+            self.settings_pages.load()
         except (OSError, ValueError) as error:
             self.add_log("失敗", str(error))
         self.update_driver()
@@ -169,12 +173,34 @@ class Workbench:
         self.reply_page.restart_watch()
 
     def show(self, name):
+        if name == "設定" and not self.unlock_settings():
+            return
         self.pages[name].tkraise()
         for key, (indicator, button) in self.nav.items():
             indicator.configure(style="Accent.TFrame" if key == name else "Nav.TFrame")
             button.configure(style="Current.Nav.TButton" if key == name else "Nav.TButton")
         if name == "海關回覆":
             self.reply_page.activate()
+
+    def unlock_settings(self):
+        if self.settings_unlocked:
+            return True
+        try:
+            config = read_config(config_source(self.config_path))
+        except (OSError, ValueError):
+            messagebox.showerror("設定", "無法讀取設定檔。", parent=self.root)
+            return False
+        password = config.get("app", "admin_password", fallback="")
+        if not password:
+            return True
+        answer = simpledialog.askstring("管理員驗證", "請輸入管理員密碼。", show="●", parent=self.root)
+        if answer is None:
+            return False
+        if not hmac.compare_digest(password.encode("utf-8"), answer.encode("utf-8")):
+            messagebox.showerror("管理員驗證", "密碼不符。", parent=self.root)
+            return False
+        self.settings_unlocked = True
+        return True
 
     def build_report_page(self, page):
         self.report_page = ReportPage(self, page)
@@ -354,7 +380,23 @@ class Workbench:
 
     def build_settings_page(self, page):
         page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
         ttk.Label(page, text="設定", style="Title.TLabel").grid(sticky="w", pady=(0, 12))
+        notebook = ttk.Notebook(page)
+        notebook.grid(sticky="nsew")
+        database = ttk.Frame(notebook, padding=12)
+        notebook.add(database, text="資料庫與路徑")
+        self.build_database_settings(database)
+        self.settings_pages = SettingsPages(self, notebook, make_table)
+        self.settings_notebook = notebook
+        footer = ttk.Frame(page)
+        footer.grid(sticky="ew", pady=(5, 0))
+        self.feedback_label = ttk.Label(footer, textvariable=self.feedback, wraplength=780)
+        self.feedback_label.pack(side="left")
+        ttk.Label(footer, textvariable=self.task_status).pack(side="right")
+
+    def build_database_settings(self, page):
+        page.columnconfigure(0, weight=1)
         paths = ttk.Frame(page, style="Card.TFrame", padding=14)
         paths.grid(sticky="ew", pady=(0, 12))
         paths.columnconfigure(1, weight=1)
@@ -386,10 +428,6 @@ class Workbench:
             self.mysql_entries.append(self.setting_entry(db, row, field, label, column))
         ttk.Label(db, text="MySQL 報單與代碼資料庫名稱需符合 test 命名規則。",
                   style="Hint.TLabel").grid(row=5, columnspan=4, sticky="w", pady=(5, 0))
-        auto_check = ttk.Checkbutton(page, text="轉完自動檢查（跟 CBS 按 F6 一樣）",
-                                    variable=self.values["check_after_convert"], onvalue="yes", offvalue="no")
-        auto_check.grid(sticky="w", pady=(8, 0))
-        self.setting_actions.append(auto_check)
         actions = ttk.Frame(page)
         actions.grid(sticky="ew", pady=(12, 6))
         for title, action, style in (("儲存設定", self.save, "Primary.TButton"),
@@ -397,9 +435,6 @@ class Workbench:
             button = ttk.Button(actions, text=title, command=action, style=style)
             button.pack(side="left", padx=(0, 8))
             self.setting_actions.append(button)
-        ttk.Label(actions, textvariable=self.task_status).pack(side="right")
-        self.feedback_label = ttk.Label(page, textvariable=self.feedback, wraplength=780)
-        self.feedback_label.grid(sticky="w")
 
     def setting_entry(self, parent, row, field, label, column=0):
         ttk.Label(parent, text=label, style="Card.TLabel").grid(
@@ -638,7 +673,7 @@ class Workbench:
         render(summaries, warning)
 
     def current_fields(self):
-        return {key: value.get() for key, value in self.values.items()}
+        return {key: self.values[key].get() for key in (*PATH_FIELDS, *DB_FIELDS)}
 
     def show_feedback(self, text, error=False):
         self.feedback.set(text)

@@ -5,17 +5,35 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def read_config(path):
+def config_path(path):
     path = Path(path).resolve()
     if path.name.casefold() in {"txtrans.ini", "cpctrans.ini"}:
         raise ValueError(f"請使用 fuelcore 的設定檔：{path}")
+    return path
+
+
+def parse_config(text, path):
     config = configparser.ConfigParser(interpolation=None)
-    with path.open(encoding="utf-8-sig") as stream:
-        try:
-            config.read_file(stream)
-        except configparser.Error as error:
-            raise ValueError(f"INI 格式錯誤：{path}") from error
+    try:
+        config.read_string(text, source=str(path))
+    except configparser.Error as error:
+        raise ValueError(f"INI 格式錯誤：{path}") from error
     return config
+
+
+def read_config(path):
+    path = config_path(path)
+    return parse_config(path.read_text(encoding="utf-8-sig"), path)
+
+
+OTHER_FIELDS = ("OTHER", "EDIOTHER")
+
+
+def other_fields(value):
+    fields = tuple(dict.fromkeys(field.strip().upper() for field in value.split(",") if field.strip()))
+    if any(field not in OTHER_FIELDS for field in fields):
+        raise ValueError("其他申報事項的寫入欄位只接受 OTHER、EDIOTHER。")
+    return fields
 
 
 def validate_test_database(name):
@@ -116,16 +134,24 @@ class Settings:
         self.user_code = options.get("user_code", "USER1")
         self.cusboxno = options["cusboxno"]
         self.write_codes = options.getboolean("write_codes", True)
-        self.other = options["other"]
+        self.other = (json.loads(config["other"]["text_json"]) if config.has_option("other", "text_json")
+                      else options["other"])
+        if not isinstance(self.other, str):
+            raise ValueError("其他申報事項必須是文字。")
+        self.other_enabled = config.getboolean("other", "enabled", fallback=True)
+        self.other_fields = other_fields(config.get("other", "fields", fallback=",".join(OTHER_FIELDS)))
         self.countries = {key.upper(): tuple(value.split(maxsplit=1))
                           for key, value in config["buyer_countries"].items()}
         self.products = {key.upper(): json.loads(value)
                          for key, value in config["products"].items()}
-        self.edi = EdiSettings.from_section(config["edi"]) if config.has_section("edi") else None
+        self.edi = (EdiSettings.from_section(config["edi"])
+                    if config.has_section("edi") and config.getboolean("edi", "enabled", fallback=True) else None)
         self.printer = config.get("print", "printer", fallback="").strip()
         self.logic_check = LogicCheckSettings.load(config, base)
         self.check_after_convert = config.getboolean("workflow", "check_after_convert", fallback=True)
+        self.archive_after_convert = config.getboolean("workflow", "archive_after_convert", fallback=True)
         self.notify = NotifySettings.load(config, base)
+        self.admin_password = config.get("app", "admin_password", fallback="")
 
     @classmethod
     def load(cls, path):

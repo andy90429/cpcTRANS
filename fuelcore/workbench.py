@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, replace
@@ -10,7 +11,7 @@ from .convert import MESSAGE, convert_file, declaration_number, read_txt
 from .db import Database
 from .logic_check import run_logic_check
 from .schema import identifier, init_sqlite
-from .settings import Settings, read_config
+from .settings import Settings, config_path, parse_config, read_config
 
 
 PATH_FIELDS = ("txt_path", "cbsapp_path")
@@ -74,12 +75,112 @@ def edited_config(path, values, *, check_paths=True):
 
 def save_fields(path, values):
     config, _ = edited_config(path, values)
+    updates = {
+        "paths": {key: config["paths"][key] for key in PATH_FIELDS},
+        "database": {key: config["database"][key] for key in DB_FIELDS},
+    }
+    if "check_after_convert" in values:
+        updates["workflow"] = {"check_after_convert": config["workflow"]["check_after_convert"]}
+    save_options(path, updates)
+
+
+def ini_layout(lines, config):
+    options, ends = {}, {}
+    section = key = None
+    indent = 0
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        current = len(line) - len(line.lstrip())
+        if key is not None and current > indent:
+            options[section][key].append(index)
+        else:
+            heading = config.SECTCRE.match(stripped)
+            if heading:
+                section, key = heading.group("header"), None
+                options.setdefault(section, {})
+            else:
+                key = config.optionxform(re.split(r"[:=]", stripped, maxsplit=1)[0].rstrip())
+                options[section][key] = [index]
+                indent = current
+        ends[section] = index
+    return options, ends
+
+
+def save_options(path, updates, *, replace_section=None):
+    """Validate the candidate INI and atomically replace only the selected options."""
+    path = config_path(path)
+    source = config_path(config_source(path))
+    original = source.read_bytes()
+    encoding = "utf-8-sig" if original.startswith(b"\xef\xbb\xbf") else "utf-8"
+    text = original.decode(encoding)
+    config = parse_config(text, source)
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    options, ends = ini_layout(lines, config)
+    indentation = [re.match(r"[^\S\r\n]*", line)[0] for line in lines]
+    insertions = {}
+    for section, values in updates.items():
+        existing = options.get(section, {})
+        changes = {config.optionxform(key): value for key, value in values.items()}
+        if section == replace_section:
+            changes.update((key, None) for key in existing.keys() - changes.keys())
+        additions = []
+        for key, value in changes.items():
+            if key in existing and value == config[section][key]:
+                continue
+            anchor = existing.get(key) or (existing[next(reversed(existing))] if existing else None)
+            indent = "" if anchor is None else indentation[anchor[0]]
+            rendered = ""
+            if value is not None:
+                continuation = newline + indent + "    "
+                value_text = value.replace("\n", continuation)
+                rendered = f"{indent}{key} = {value_text}{newline}"
+            if key in existing:
+                start, *continued = existing[key]
+                if continued:
+                    continuation_lines = set(continued)
+                    for index in range(start + 1, continued[-1] + 1):
+                        if index in continuation_lines or not lines[index].strip():
+                            lines[index] = ""
+                lines[start] = rendered
+            elif rendered:
+                additions.append(rendered)
+        if additions:
+            if section in ends:
+                index = ends[section] + 1
+                insertions.setdefault(index, []).extend(additions)
+            else:
+                insertions.setdefault(len(lines), []).extend((newline, f"[{section}]{newline}", *additions))
+    for index in sorted(insertions, reverse=True):
+        if index and lines[index - 1] and not lines[index - 1].endswith(("\n", "\r")):
+            lines[index - 1] += newline
+        lines[index:index] = insertions[index]
+    candidate = "".join(lines)
+    saved = parse_config(candidate, path)
+    Settings(saved, path.parent)
+    for section, values in updates.items():
+        if any(saved.get(section, key, fallback=None) != value for key, value in values.items()):
+            raise ValueError("設定含有 INI 無法保留的內容，未儲存。")
+    for section in config.sections():
+        if section != replace_section:
+            changed = {config.optionxform(key) for key in updates.get(section, {})}
+            if any(saved.get(section, key, fallback=None) != value
+                   for key, value in config.items(section) if key not in changed):
+                raise ValueError("無法保留其他設定，未儲存。")
+    if candidate != text or not path.exists():
+        if (source != path and path.exists()) or source.read_bytes() != original:
+            raise ValueError("設定檔已由其他程式更新，請重新載入後再儲存。")
+        atomic_write_config(path, candidate.encode(encoding))
+
+
+def atomic_write_config(path, data):
     temp = None
     try:
-        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                suffix=".ini", delete=False) as stream:
+        with NamedTemporaryFile(dir=path.parent, suffix=".ini", delete=False) as stream:
             temp = Path(stream.name)
-            config.write(stream)
+            stream.write(data)
         temp.replace(path)
     finally:
         if temp is not None and temp.exists():

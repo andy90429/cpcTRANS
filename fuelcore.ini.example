@@ -15,6 +15,14 @@ printer =
 
 [workflow]
 check_after_convert = yes
+archive_after_convert = yes
+
+[app]
+admin_password =
+
+[other]
+enabled = yes
+fields = OTHER,EDIOTHER
 
 [notify]
 enabled = no

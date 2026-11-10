@@ -116,14 +116,18 @@ def header_values(db, h, items, products, settings, notes):
     values = dict(HEADER_FIXED)
     values.update(APLCHECK=h[29], STPLACE=h[4], BYCRTYCODE=country_code, BYCRTYNAME=country_name,
                   SERSDATE=date, CreateDateTime=date, GWEIGHT=h[13], NWEIGHT=h[13], TOT_NETWT=h[13],
-                  PKGTOTAL=package_total(number(h[15]), notes), OTHER=other,
-                  EDIOTHER=ediother, BANO=rules.voyage(h[21], notes), BACALLNO=h[22],
+                  PKGTOTAL=package_total(number(h[15]), notes), BANO=rules.voyage(h[21], notes), BACALLNO=h[22],
                   BANAME=ship_name, CUSBOXNO=settings.cusboxno, CUSMANNO=h[0],
                   BYNAME=buyer_name, BYBAN=buyer_code, FOBPRICE=h[26],
                   TOT_AMOUNT=h[26], TOTALAMT=h[26], TWDPRICE=h[25], TOT_DUTYAMT=h[25],
                   FOREX=rules.rounded(number(h[28]), 3), TAXTOTAL=h[31], ITEMNAME=products[0][0],
                   ITEMCODE=items[0][2], REGISTRYID=h[1][4:10], SHIPPINGID=h[1][-4:],
                   LastModifyDateTime=datetime.now().isoformat(sep=" ", timespec="seconds"))
+    if settings.other_enabled:
+        values.update((field, text) for field, text in (("OTHER", other), ("EDIOTHER", ediother))
+                      if field in settings.other_fields)
+    else:
+        values.update(OTHER="", EDIOTHER="")
     values.update({"買方編號": h[23], "買方簡稱": buyer_name[:20],
                    "參考號碼": rules.reference_number(roc, h[1])})
     for column in ("鍵檔人員", "LastModifyUser", "CreateUserName", "ModifyUserName"):
