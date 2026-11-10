@@ -76,11 +76,11 @@ class Database:
             raise ValueError("SQLite 連線已有進行中的交易，請先提交或回滾")
         self.execute("START TRANSACTION" if self.mysql else "BEGIN IMMEDIATE")
 
-    def check_engines(self):
+    def check_engines(self, code_tables=CODE_TABLES):
         if not self.mysql:
             return
         tables = [(self.settings.database, table) for table in read_schema()]
-        tables.extend((self.settings.code_database, table) for table in CODE_TABLES)
+        tables.extend((self.settings.code_database, table) for table in code_tables)
         self.require_transactional_tables(tables)
 
     def require_transactional_tables(self, tables):

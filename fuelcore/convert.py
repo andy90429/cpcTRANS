@@ -183,6 +183,7 @@ def write_declaration(db, h, items, settings, notes):
     values = header_values(db, h, items, products, settings, notes)
     insert(db, "cusdec", key, values, notes)
     write_details(db, key, h, items, products, notes)
+    return values
 
 
 def transact(header, items, settings, notes, connection):
@@ -191,8 +192,8 @@ def transact(header, items, settings, notes, connection):
         with closing(Database(settings, connection)) as db:
             db.begin()
             try:
-                db.check_engines()
-                write_declaration(db, header, items, settings, pending)
+                db.check_engines(("mybuyer", "myshipname"))
+                values = write_declaration(db, header, items, settings, pending)
                 db.commit()
             except BaseException as error:
                 db.rollback()
@@ -201,6 +202,10 @@ def transact(header, items, settings, notes, connection):
                     continue
                 notes.extend(pending)
                 raise
+            from .declare_rate import conversion_rate_note
+            reminder = conversion_rate_note(db, values)
+            if reminder:
+                pending.append(reminder)
         notes.extend(pending)
         return
 

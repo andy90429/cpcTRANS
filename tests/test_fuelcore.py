@@ -94,7 +94,7 @@ class RulesTest(unittest.TestCase):
         self.assertIn("USE `test_declarations`", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS `test_codes`.`mybuyer`", sql)
         self.assertIn("`PID` int(11) NOT NULL AUTO_INCREMENT", sql)
-        self.assertEqual(sql.count("ENGINE=InnoDB"), 11)
+        self.assertEqual(sql.count("ENGINE=InnoDB"), len(read_schema()) + len(CODE_TABLES))
 
     def test_innodb_error_lists_each_invalid_table(self):
         settings = Mock(driver="mysql", database="test_declarations", code_database="test_codes")

@@ -13,6 +13,9 @@ CODE_TABLES = {
                "BY017 varchar(5), BY018 varchar(50)",
     "myshipname": "SN001 {identity}, SN002 varchar(10), "
                   "SN003 varchar(40), SN004 varchar(25)",
+    "mydeclarerate": "DR001 {identity}, DR002 varchar(3) NOT NULL, DR003 varchar(6) NOT NULL, "
+                     "DR004 int NOT NULL, DR005 {rate} NOT NULL, DR006 {rate} NOT NULL, "
+                     "UNIQUE (DR003, DR004, DR002)",
 }
 
 
@@ -69,11 +72,12 @@ def statements(settings, path=SCHEMA):
             definitions.append("PRIMARY KEY (" + ", ".join(primary) + ")")
         yield "CREATE TABLE IF NOT EXISTS " + identifier(table) + " (" + ", ".join(definitions) + ")" + suffix
     identity = "int NOT NULL AUTO_INCREMENT PRIMARY KEY" if mysql else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    rate = "decimal(15,5)" if mysql else sqlite_type("decimal(15,5)")
     for table, definition in CODE_TABLES.items():
         name = identifier(table)
         if mysql:
             name = identifier(settings.code_database) + "." + name
-        yield "CREATE TABLE IF NOT EXISTS " + name + " (" + definition.format(identity=identity) + ")" + suffix
+        yield "CREATE TABLE IF NOT EXISTS " + name + " (" + definition.format(identity=identity, rate=rate) + ")" + suffix
 
 
 def init_sqlite(settings, path=SCHEMA):

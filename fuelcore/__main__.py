@@ -25,6 +25,15 @@ def main():
     schema.add_argument("--config", required=True)
     schema.add_argument("--csv", type=Path, default=SCHEMA)
     schema.add_argument("--output", type=Path)
+    for name, help_text in (("rate-simulate", "比對每旬匯率並產生唯讀報告"),
+                            ("rate-import", "確認後寫入每旬匯率測試庫")):
+        rate = commands.add_parser(name, help=help_text)
+        rate.add_argument("--config", default="fuelcore.ini")
+        rate.add_argument("--from-files", nargs="+", type=Path, metavar="FILE")
+        if name == "rate-simulate":
+            rate.add_argument("--output", type=Path, required=True)
+        else:
+            rate.add_argument("--yes", action="store_true", help="確認寫入測試庫")
     check = commands.add_parser("check", help="用本機外掛執行 CBS 邏輯檢查")
     check.add_argument("sersno", nargs="+")
     check.add_argument("--config", default="fuelcore.ini")
@@ -55,6 +64,9 @@ def main():
     agent.add_argument("--mapping", type=Path)
     agent.add_argument("--shorts", type=Path)
     args = parser.parse_args()
+    if args.command in ("rate-simulate", "rate-import"):
+        from fuelcore.declare_rate import run_rate_command
+        return run_rate_command(args)
     if args.command == "agent":
         return run_agent(args)
     if args.command == "list-printers":

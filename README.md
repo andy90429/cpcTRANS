@@ -73,6 +73,18 @@ python -m fuelcore schema --config fuelcore.ini --output fuelcore_test.sql
 
 MySQL 報單表與代碼表使用同一個連線和交易。船舶代碼維護若發生可回復錯誤，回滾該段並留下說明。SQLite 把有小數位的欄位存成定點文字，以保留尾端的零供測試核對。
 
+## 每旬報關匯率
+
+```powershell
+python -m fuelcore rate-simulate --config fuelcore.ini --output .\匯率報告
+python -m fuelcore rate-import --config fuelcore.ini
+python -m fuelcore rate-simulate --config fuelcore.ini --output .\匯率報告 --from-files .\current.json .\history.txt
+```
+
+執行匯率指令會向關務署 `portal.sw.nat.gov.tw` 取得本旬與歷史匯率。使用 `--from-files` 改讀本旬 JSON，可另附歷史 TXT，全程離線。先執行 `schema` 準備代碼測試庫的 `mydeclarerate`。
+
+模擬只查詢資料庫。匯入會顯示變更，輸入 `y` 或指定 `--yes` 才寫入測試庫。歷史檔只用於核對最近九個已完成旬別。轉檔後，若測試庫已有同一期旬的買進匯率，程式會在報單匯率不符時加一行提醒。
+
 ## CBS 邏輯檢查（F6）
 
 將本機外掛路徑填入 `fuelcore.ini` 的 `[logic_check] plugin_dir`，或設定 `FUELCORE_LOGIC_PLUGIN` 覆蓋。外掛的進入點為 `run_check.py`。直接用 Python 執行 fuelcore 時可將 `python_exe` 留空。封裝版請填本機 Python 執行檔路徑。逾時預設為 120 秒。
