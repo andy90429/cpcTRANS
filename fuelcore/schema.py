@@ -14,8 +14,8 @@ CODE_TABLES = {
     "myshipname": "SN001 {identity}, SN002 varchar(10), "
                   "SN003 varchar(40), SN004 varchar(25)",
     "mydeclarerate": "DR001 {identity}, DR002 varchar(3) NOT NULL, DR003 varchar(6) NOT NULL, "
-                     "DR004 int NOT NULL, DR005 {rate} NOT NULL, DR006 {rate} NOT NULL, "
-                     "UNIQUE (DR003, DR004, DR002)",
+                     "DR004 int NOT NULL, DR005 {rate} NOT NULL, DR006 {rate} NOT NULL",
+    # No unique key on (DR003, DR004, DR002): CBS has none, and its data can hold repeated rows.
 }
 
 

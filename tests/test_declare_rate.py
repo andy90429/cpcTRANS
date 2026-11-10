@@ -105,6 +105,17 @@ def test_plan_actions_and_history_is_read_only(db_settings):
     assert "最近 9 旬歷史比對不一致 1 筆" in report_text(plan)
 
 
+def test_repeated_rows_like_cbs_are_accepted_and_replaced_by_one(db_settings):
+    # CBS has no unique key on currency and period, and its data contains repeated rows.
+    seed(db_settings, [("USD", "115/11", 1, "32.45500", "32.55500")] * 2
+         + [("JPY", "115/11", 1, "0.22000", "0.24000"), ("EUR", "115/11", 1, "36.12346", "36.35000")])
+    plan = plan_rates(db_settings, downloader=fake_download)
+    assert {change.rate.code: change.action for change in plan.changes} == {"EUR": "相同", "JPY": "相同", "USD": "更新"}
+    assert save_rates(db_settings, plan) == 1
+    assert [row[1:] for row in rows(db_settings)] == [
+        ("EUR", "36.12346", "36.35000"), ("JPY", "0.22000", "0.24000"), ("USD", "32.45500", "32.55500")]
+
+
 def test_download_fallback_and_local_files(db_settings, tmp_path):
     def offline_history(name):
         if name == HISTORY:
