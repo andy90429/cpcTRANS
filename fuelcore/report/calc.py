@@ -10,6 +10,8 @@ from .table13 import FACTORS
 ZERO = Decimal(0)
 FEE_RATE = Decimal("0.0004")
 BARREL_KL = Decimal("0.158987")
+GRAVITY_NUMERATOR = Decimal("141.5")
+GRAVITY_OFFSET = Decimal("131.5")
 
 
 def decimal_input(value):
@@ -40,7 +42,20 @@ def table_factor(api):
 def density_api(density):
     if not Decimal("0.5") < density < Decimal("1.1"):
         raise RpxError("密度須大於 0.5 且小於 1.1")
-    return rounded(Decimal("141.5") / density - Decimal("131.5"), 1) - Decimal("0.1")
+    return rounded(GRAVITY_NUMERATOR / density - GRAVITY_OFFSET, 1) - Decimal("0.1")
+
+
+def density_from_api(api):
+    """Return the representative density and inclusive four-decimal bounds."""
+    step = Decimal("0.0001")
+    lower = rounded(GRAVITY_NUMERATOR / (GRAVITY_OFFSET + api + Decimal("0.15")), 4)
+    upper = rounded(GRAVITY_NUMERATOR / (GRAVITY_OFFSET + api + Decimal("0.05")), 4)
+    if density_api(lower) != api:
+        lower += step
+    if density_api(upper) != api:
+        upper -= step
+    density = rounded(GRAVITY_NUMERATOR / (GRAVITY_OFFSET + api + Decimal("0.1")), 4)
+    return density, lower, upper
 
 
 def ton_to_liters(quantity, factor):

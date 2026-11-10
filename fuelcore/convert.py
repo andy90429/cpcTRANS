@@ -45,8 +45,11 @@ class Result:
 
 
 def read_txt(path):
-    lines = [line.split("|") for line in Path(path).read_text(encoding="utf-8-sig").splitlines()
-             if line.strip()]
+    return parse_txt_lines(Path(path).read_text(encoding="utf-8-sig").splitlines())
+
+
+def parse_txt_lines(lines):
+    lines = [line.split("|") for line in lines if line.strip()]
     if not lines or len(lines[0]) != 38:
         raise ValueError("主檔必須有 38 欄")
     header, *items = lines

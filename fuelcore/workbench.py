@@ -12,6 +12,7 @@ from .db import Database
 from .logic_check import run_logic_check
 from .schema import identifier, init_sqlite
 from .settings import Settings, config_path, parse_config, read_config
+from .txt_edit import BACKUP_FOLDER
 
 
 PATH_FIELDS = ("txt_path", "cbsapp_path")
@@ -212,6 +213,7 @@ def find_inputs(folder, extra=(), *, show_all=False, today=None, on_error=None):
     paths = set(extra)
     if folder is not None:
         for parent, dirs, names in os.walk(folder, onerror=on_error):
+            dirs[:] = [name for name in dirs if name.casefold() != BACKUP_FOLDER.casefold()]
             if not show_all:
                 dirs[:] = [name for name in dirs if recent_folder(name, earliest, today)]
             paths.update(Path(parent) / name for name in names if Path(name).suffix.lower() == ".txt")
@@ -228,7 +230,7 @@ def find_inputs(folder, extra=(), *, show_all=False, today=None, on_error=None):
         modified = 0
         try:
             path = path.resolve()
-            if path in files:
+            if path in files or BACKUP_FOLDER in path.parts[:-1]:
                 continue
             modified = path.stat().st_mtime_ns
             header, _ = read_txt(path)

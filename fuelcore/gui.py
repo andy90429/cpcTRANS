@@ -14,6 +14,8 @@ from .report_view import ReportPage
 from .send_check import prepare, split_numbers
 from .settings import Settings, read_config
 from .settings_view import SettingsPages
+from .txt_edit import TxtEditor
+from .txt_view import TxtEditWindow
 from .workbench import (
     DB_FIELDS, DEFAULTS, FAILED, IMPORTED, PATH_FIELDS, PENDING, UNREADABLE,
     check_summaries, config_source, convert_batch, edited_config, load_fields, resolve_folder,
@@ -103,6 +105,7 @@ class Workbench:
         self.events = queue.Queue()
         self.busy = False
         self.extra = set()
+        self.source_folder = None
         self.failures = {}
         self.checks = {}
         self.conversions = {}
@@ -360,7 +363,7 @@ class Workbench:
         panel.grid(sticky="nsew")
         self.files.configure(height=7)
         self.files.bind("<<TreeviewSelect>>", lambda _: self.update_buttons())
-        self.files.bind("<Double-1>", self.show_check_detail)
+        self.files.bind("<Double-1>", self.open_file_detail)
 
         log = ttk.Frame(page, style="Card.TFrame", padding=14)
         log.grid(row=2, column=0, sticky="nsew")
@@ -477,6 +480,7 @@ class Workbench:
 
     def show_files(self, scan):
         folder, files, warnings = scan
+        self.source_folder = folder
         self.busy = True
         self.task_status.set("正在更新檔案清單…")
         self.source_text.set(str(folder) if folder else "尚未指定有效的 TXT 來源目錄，可在設定指定或加入檔案。")
@@ -612,9 +616,17 @@ class Workbench:
         header, _ = summaries.get(number, (("", "", ""), ()))
         return f"呼號（F2）：{header[1] or '未取得呼號'}"
 
-    def show_check_detail(self, event):
+    def open_file_detail(self, event):
+        if self.busy or self.files.identify_region(event.x, event.y) != "cell":
+            return
         row = self.files.identify_row(event.y)
         file = self.rows.get(row)
+        if file and file.status == PENDING:
+            folder = self.source_folder
+            self.run_task("正在讀取 TXT…", lambda: TxtEditor(file.path, folder),
+                          lambda editor: TxtEditWindow(self, editor, make_table),
+                          lambda message: messagebox.showerror("無法開啟 TXT", message, parent=self.root))
+            return
         if not file or file.status != IMPORTED or file.sersno.upper() not in self.checks:
             return
         ids = (file.sersno,)
