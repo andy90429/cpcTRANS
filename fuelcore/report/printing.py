@@ -1,8 +1,7 @@
 from pathlib import Path
 from dataclasses import dataclass
 
-from . import prepare_report, safe_destination
-from .retention import cleanup_batches
+from . import prepare_report
 from .rpx import RpxError
 
 
@@ -45,7 +44,6 @@ def print_report(settings, sersnos, *, yes=False, reports=None, cache=None, conn
                  backend=None, confirm=None, notify=print, retention_dir=Path("列印輸出")):
     plan = plan_print(settings, backend)
     batch = prepare_report(settings, sersnos, reports=reports, cache=cache, connection=connection)
-    cleanup_batches(safe_destination(retention_dir, batch.assets))
     notify(plan.summary(batch))
     if not yes:
         try:

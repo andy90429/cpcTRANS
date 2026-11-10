@@ -61,11 +61,13 @@ def order_key(row):
 
 
 class DeclarationReader:
-    def __init__(self, db):
+    def __init__(self, db, *, enrich=True):
         self.db = db
         settings = db.settings
         self.schema = getattr(settings, "database", None)
         self.tables = db.table_names(self.schema)
+        if not enrich:
+            return
         self.edi_schema = settings.edi.edi_database if settings.edi else None
         self.edi_tables = db.table_names(self.edi_schema) if db.mysql and self.edi_schema else self.tables if not db.mysql else {}
         self.code_schema = getattr(settings, "code_database", None)
@@ -109,11 +111,14 @@ class DeclarationReader:
         rows = self.db.select_dicts(sql + " LIMIT 2", params)
         return [normalized(rows[0])] if len(rows) == 1 else []
 
-    def read(self, sersno):
+    def read(self, sersno, *, compare=False):
         headers = self.rows("CUSDEC", sersno)
         if len(headers) != 1:
             raise RpxError(f"{sersno} 找不到唯一的 5203 報單")
         header = headers[0]
+        if compare:
+            return {"CUSDEC": headers, **{name: self.rows(name, sersno, header["MSGCODE"])
+                                         for name in ("INVITEM", "PERMITNO", "SUMSTC")}}
         header["CUSISCODE"] = as_text(header.get("CUSISCODE")).strip() or self.route(sersno)
         refunds = as_text(header.get("退稅清表")).strip()
         header["退稅清表"] = int(refunds) if refunds.isdecimal() else 0

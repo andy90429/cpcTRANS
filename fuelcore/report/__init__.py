@@ -7,7 +7,7 @@ from tempfile import mkdtemp
 
 from ..db import Database
 from .declaration import DeclarationReader, ReportAssets, build_page
-from .retention import cleanup_batches, mark_batch
+from .retention import mark_batch
 from .rpx import RpxDocument, RpxError
 
 
@@ -120,14 +120,12 @@ def render_report(settings, sersnos, output, *, reports=None, cache=None, connec
 
     batch = prepare_report(settings, sersnos, reports=reports, cache=cache, connection=connection)
     output = safe_destination(output, batch.assets)
-    cleanup_batches(output)
     pdf_bytes = render_pdf(batch.pages, batch.assets, batch.cache, batch.warnings)
     rpx_bytes = RpxDocument.create(f"出口報單 {batch.ids[0]}", batch.fronts).to_bytes()
     differences = reference_comparison(batch.assets, dict(zip(batch.ids, batch.fronts)), batch.warnings)
 
     output.mkdir(parents=True, exist_ok=True)
     folder = Path(mkdtemp(prefix=f"報單_{batch.ids[0]}_", dir=output))
-    mark_batch(folder)
     rpx, pdf = folder / "報單.Rpx", folder / "報單.pdf"
     rpx.write_bytes(rpx_bytes)
     pdf.write_bytes(pdf_bytes)
@@ -136,4 +134,5 @@ def render_report(settings, sersnos, output, *, reports=None, cache=None, connec
     if differences:
         comparison = folder / "比對差異.txt"
         comparison.write_bytes(("\r\n".join(differences) + "\r\n").encode("utf-8-sig"))
+    mark_batch(folder)
     return ReportResult(rpx, pdf, previews, list(dict.fromkeys(batch.warnings)), comparison)

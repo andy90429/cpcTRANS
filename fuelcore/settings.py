@@ -157,6 +157,10 @@ class Settings:
         self.txt_source = Path(base) / txt_path if txt_path else None
         self.notify = NotifySettings.load(config, base)
         self.admin_password = config.get("app", "admin_password", fallback="")
+        self.cleanup_days = {key: config.getint("cleanup", key + "_days", fallback=default)
+                             for key, default in (("print", 30), ("diag", 30), ("generated", 7), ("correction", 90))}
+        if any(value < 0 for value in self.cleanup_days.values()):
+            raise ValueError("[cleanup] 天數不可小於 0。")
 
     @classmethod
     def load(cls, path):

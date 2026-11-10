@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import mkdtemp
 
 from ..db import Database
+from ..report.retention import mark_outputs
 from ..schema import identifier
 from .reply import REPLY_CODES, ReplyRow, apply_defaults, convert_reply, reply_code
 from .simulation import day_sequence
@@ -266,4 +267,5 @@ def simulate_receive(settings, sources, output, *, now=None, connection=None):
             lines.append(f"{result.status} {result.file.name}：{result.message}")
     report = folder / "模擬結果.txt"
     report.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8-sig"))
+    mark_outputs(folder, {report.name: "diag"})
     return report, results

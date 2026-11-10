@@ -224,4 +224,4 @@ def export_correction(report, index, inputs, folder, *, exchange=None):
     trial, after = report.correction_values(index, inputs, exchange)
     number = report.batch.ids[index]
     content = correction_bytes(trial, after, report.number_caption(index) or number, report.release(index))
-    return new_copy(folder, f"{number}_更正申請書", ".xlsx", content, report.batch.assets)
+    return new_copy(folder, f"{number}_更正申請書", ".xlsx", content, report.batch.assets, category="correction")

@@ -13,6 +13,12 @@ path = fuelcore_test.sqlite3
 [print]
 printer =
 
+[cleanup]
+print_days = 30
+diag_days = 30
+generated_days = 7
+correction_days = 90
+
 [workflow]
 check_after_convert = yes
 archive_after_convert = yes

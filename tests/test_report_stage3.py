@@ -196,7 +196,9 @@ class EditableReportTest(unittest.TestCase):
         report = self.load()
         path = report.save(self.output, 0)
         digest = sha256(path.read_bytes()).digest()
-        reopened = EditableReport.open(path, cache=self.output / "cache")
+        reopened = EditableReport.open(path, cache=self.output / "cache", backup=self.output)
+        backup, = (self.output / "原檔備份").glob("*.Rpx")
+        self.assertEqual(sha256(backup.read_bytes()).digest(), digest)
         trial = reopened.trial(0)
         self.assertEqual(trial.calculate().rows, sample_trial().calculate().rows)
         self.assertEqual(report_ids(self.settings, "TEST", connection=self.db), list(reversed(REPORTS)))
@@ -217,6 +219,24 @@ class EditableReportTest(unittest.TestCase):
         with closing(pypdfium2.PdfDocument(edited.export_pdf(self.output))) as pdf:
             self.assertEqual(len(pdf), 4)
         self.assertTrue(self.sql and all(sql.startswith("SELECT ") for sql in self.sql))
+
+    def test_opened_report_compares_visible_direct_fields_with_test_database(self):
+        from fuelcore.report.comparison import compare_report
+        from fuelcore.report_view import saved_rpx
+
+        report = self.load()
+        generated = report.save_generated(self.output)
+        report = EditableReport.open(generated, cache=self.output / "cache", backup=self.output)
+        self.db.execute("UPDATE cusdec SET BANAME = ? WHERE SERSNO = ?", ("TEST CHANGED", REPORTS[0]))
+        self.db.commit()
+        self.sql.clear()
+        differences, warnings = compare_report(report, self.settings, connection=self.db)
+        self.assertFalse(warnings)
+        matches = [diff for diff in differences[0] if diff.label == "CUSDEC.BANAME"]
+        self.assertEqual([diff.database for diff in matches], ["TEST CHANGED"])
+        self.assertFalse(any(diff.label == "CUSDEC.BANAME" for diff in differences[1]))
+        self.assertTrue(self.sql and all(sql.startswith("SELECT ") for sql in self.sql))
+        self.assertEqual({kind for _, kind, _ in saved_rpx(self.output)}, {"資料庫產生", "原檔備份"})
 
     def test_gui_load_trial_and_confirm_print(self):
         import tkinter as tk

@@ -8,6 +8,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from .cert_check import CertificateError, check_pfx, expiry_date
 from .declare_rate import plan_rates, report_text, save_rates
+from .report.retention import mark_diagnostic
 from .settings import Settings
 from .workbench import config_source
 
@@ -56,6 +57,7 @@ class ToolsPage:
                                     delete=False) as report:
                 report.write(text)
                 path = Path(report.name)
+            mark_diagnostic(path)
             return settings, plan, path, text
 
         self.app.run_task("正在模擬每旬匯率…", work, self.review_rates, self.rate_error)

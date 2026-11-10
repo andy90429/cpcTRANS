@@ -1,18 +1,49 @@
 """Tk controls for previewing, editing and printing a read-only report."""
 
+import os
 import re
+import stat
 import tkinter as tk
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .report.calc import ItemInput, decimal_input
+from .report.comparison import compare_report
 from .report.correction import export_correction
 from .report.editing import EditableReport, report_ids
 from .report.printing import plan_print, print_batch
+from .report.retention import BATCH_NAME, MARKER, ordinary
 from .report.rpx import RpxError
 from .settings import Settings
 from .workbench import config_source
+
+
+def windows_open(path, action="open"):
+    if not hasattr(os, "startfile"):
+        raise RpxError("此動作需要 Windows。")
+    os.startfile(str(path), action)
+
+
+def saved_rpx(output):
+    if not output.is_dir():
+        return []
+    folders = [(output, "修改副本"), (output / "原檔備份", "原檔備份")]
+    folders.extend((folder, "資料庫產生") for folder in output.iterdir()
+                   if (BATCH_NAME.fullmatch(folder.name) or re.fullmatch(r"產生_[a-z0-9_]{8}", folder.name))
+                   and (folder / MARKER).is_file())
+    files = []
+    for folder, kind in folders:
+        if not folder.exists() or not ordinary(folder, stat.S_ISDIR):
+            continue
+        for path in folder.iterdir():
+            try:
+                if path.suffix.casefold() == ".rpx" and ordinary(path, stat.S_ISREG):
+                    files.append((path, kind, datetime.fromtimestamp(path.stat().st_mtime)))
+            except OSError:
+                continue
+    return sorted(files, key=lambda entry: (entry[2], entry[0].name), reverse=True)
 
 
 class ReportPage:
@@ -25,6 +56,9 @@ class ReportPage:
         self.image = None
         self.selected_page = 0
         self.saved_report = self.saved_pdf = None
+        self.differences = None
+        self.saved_differences = None
+        self.correction_path = None
         self.dirty_notice = tk.StringVar()
         self.selection = tk.StringVar()
         self.number = tk.StringVar()
@@ -44,13 +78,14 @@ class ReportPage:
         ttk.Button(load, text="查詢清單", command=self.lookup).grid(row=0, column=2, padx=6)
         ttk.Button(load, text="從資料庫產生", style="Primary.TButton", command=self.load).grid(row=0, column=3)
         ttk.Button(load, text="開啟 Rpx…", command=self.open).grid(row=0, column=4, padx=(6, 0))
+        ttk.Button(load, text="我存過的檔案", command=self.saved_files).grid(row=1, column=1, sticky="w", pady=(4, 0))
         actions = ttk.Frame(page)
         actions.grid(sticky="ew", pady=8)
         self.buttons = {}
         for index, (label, command) in enumerate((
             ("輸出 PDF", self.export), ("直接列印", self.print_report), ("試算", self.open_trial),
             ("更正申請書 Excel", self.export_excel), ("修改欄位", self.open_editor),
-            ("另存 Rpx", self.save_rpx),
+            ("另存 Rpx", self.save_rpx), ("列印更正申請書", self.print_correction),
         )):
             button = ttk.Button(actions, text=label, command=command, state="disabled")
             button.grid(row=index // 3, column=index % 3, sticky="ew", padx=(0, 6), pady=2)
@@ -76,6 +111,18 @@ class ReportPage:
         scroll_x.grid(row=1, column=0, sticky="ew")
         self.canvas.bind("<MouseWheel>", lambda event: self.canvas.yview_scroll(-int(event.delta / 120), "units"))
         self.canvas.bind("<Configure>", self.position_preview)
+        self.diff_panel = ttk.Frame(view, padding=5)
+        self.diff_panel.grid(row=0, column=2, sticky="nsew")
+        ttk.Label(self.diff_panel, text="資料庫比對差異").pack(anchor="w")
+        self.diff_table = ttk.Treeview(self.diff_panel, columns=("name", "rpx", "database"), show="headings")
+        for key, title in (("name", "欄位"), ("rpx", "Rpx 值"), ("database", "資料庫值")):
+            self.diff_table.heading(key, text=title)
+            self.diff_table.column(key, width=112)
+        self.diff_table.pack(side="left", fill="both", expand=True)
+        diff_scroll = ttk.Scrollbar(self.diff_panel, command=self.diff_table.yview)
+        diff_scroll.pack(side="right", fill="y")
+        self.diff_table.configure(yscrollcommand=diff_scroll.set)
+        self.diff_panel.grid_remove()
         footer = ttk.Frame(page)
         footer.grid(sticky="ew", pady=(6, 0))
         ttk.Label(footer, textvariable=self.dirty_notice, foreground="#b54708").pack(side="right", padx=(10, 0))
@@ -110,26 +157,47 @@ class ReportPage:
 
     def load(self):
         ids = re.split(r"[,，\s]+", self.number.get().strip())
-        self.load_task(lambda: EditableReport.from_database(self.settings(), ids))
+        self.load_task(lambda: EditableReport.from_database(self.settings(), ids), generated=True)
 
     def open(self):
         if self.workbench.busy:
             return
         path = filedialog.askopenfilename(parent=self.page, filetypes=[("Rpx 報單", "*.rpx")])
         if path:
-            self.load_task(lambda: EditableReport.open(Path(path)))
+            self.open_path(path)
 
-    def load_task(self, source):
+    def open_path(self, path):
+        self.load_task(lambda: EditableReport.open(Path(path), backup=self.output), compare=True)
+
+    def compare(self, report):
+        try:
+            return compare_report(report, self.settings())
+        except (OSError, ValueError, KeyError):
+            return [()] * len(report.batch.ids), ["無法讀取測試庫設定，已開啟 Rpx 預覽。"]
+
+    def load_task(self, source, *, compare=False, generated=False):
         def work():
             report = source()
-            return report, report.pdf()
+            pdf = report.pdf()
+            differences, warnings = self.compare(report) if compare else (None, [])
+            if generated:
+                report.save_generated(self.output)
+            return report, pdf, differences, warnings
 
-        self.confirm_leave(lambda: self.task("產生報單預覽…", work, lambda result: self.install(*result)))
+        def ready(result):
+            report, pdf, self.differences, warnings = result
+            self.install(report, pdf)
+            if warnings:
+                self.status.set(" ".join(warnings))
+
+        self.confirm_leave(lambda: self.task("產生報單預覽…", work, ready))
 
     def install(self, report, pdf, index=0, *, edited=False):
         self.report, self.pdf = report, pdf
         if not edited:
             self.saved_report, self.saved_pdf = report, pdf
+            self.saved_differences = self.differences
+            self.correction_path = None
         choices = [f"{i + 1} · {number} · {side}" for i, (number, side) in enumerate(
             (number, side) for number in report.batch.ids for side in ("正面", "背面")
         )]
@@ -137,6 +205,7 @@ class ReportPage:
         self.status.set("已更新預覽。" if edited else f"已載入 {len(report.batch.ids)} 張報單。")
         for button in self.buttons.values():
             button.state(["!disabled"])
+        self.buttons["列印更正申請書"].state(["!disabled" if self.correction_path else "disabled"])
         self.update_dirty()
         self.show_page(index)
 
@@ -148,7 +217,23 @@ class ReportPage:
     def show_page(self, index):
         self.selected_page = index
         self.pages.current(index)
+        self.show_differences()
         self.preview()
+
+    def page_differences(self):
+        if self.differences is None or self.selected_page % 2:
+            return ()
+        return self.differences[self.selected_page // 2]
+
+    def show_differences(self):
+        self.diff_table.delete(*self.diff_table.get_children())
+        differences = self.page_differences()
+        if differences:
+            self.diff_panel.grid()
+            for diff in differences:
+                self.diff_table.insert("", "end", values=(diff.label, diff.rpx, diff.database))
+        else:
+            self.diff_panel.grid_remove()
 
     def select_page(self, _=None):
         target = self.pages.current()
@@ -158,8 +243,12 @@ class ReportPage:
         if target // 2 == self.selected_page // 2:
             self.show_page(target)
         else:
+            def discard():
+                self.differences = self.saved_differences
+                self.install(self.saved_report, self.saved_pdf, target)
+
             self.confirm_leave(lambda: self.show_page(target),
-                               lambda: self.install(self.saved_report, self.saved_pdf, target))
+                               discard)
 
     def confirm_leave(self, proceed, discard=None):
         if self.workbench.busy:
@@ -202,8 +291,21 @@ class ReportPage:
     def position_preview(self, _=None):
         if self.image is not None:
             width = max(self.canvas.winfo_width(), self.image.width() + 24)
-            self.canvas.coords("report", (width - self.image.width()) // 2, 12)
+            x = (width - self.image.width()) // 2
+            self.canvas.coords("report", x, 12)
             self.canvas.configure(scrollregion=(0, 0, width, self.image.height() + 24))
+            self.canvas.delete("difference")
+            differences = self.page_differences()
+            if differences:
+                front = self.report.batch.fronts[self.selected_page // 2]
+                sx = self.image.width() / front.number("Width", 794)
+                sy = self.image.height() / front.number("Height", 1123)
+                for diff in differences:
+                    field = front.children[diff.position]
+                    left, top = x + field.number("Left") * sx, 12 + field.number("Top") * sy
+                    self.canvas.create_rectangle(left, top, left + field.number("Width", 1) * sx,
+                                                 top + field.number("Height", 1) * sy,
+                                                 outline="#b42318", width=2, tags="difference")
 
     def active_report(self):
         if self.report is None:
@@ -220,6 +322,7 @@ class ReportPage:
 
         def done(path):
             self.saved_report, self.saved_pdf = report, self.pdf
+            self.saved_differences = self.differences
             self.update_dirty()
             self.saved(path)
             if after:
@@ -251,16 +354,72 @@ class ReportPage:
             self.show_error(error)
 
     def save_excel(self, report, index, inputs=None, *, exchange=None):
+        def ready(path):
+            self.correction_path = path
+            self.buttons["列印更正申請書"].state(["!disabled"])
+            self.saved(path)
+
         self.task("產生更正申請書…", lambda: export_correction(report, index, inputs, self.output,
-                                                               exchange=exchange), self.saved)
+                                                               exchange=exchange), ready)
+
+    def print_correction(self):
+        path = self.correction_path
+        if not path or self.workbench.busy:
+            return
+        if not messagebox.askokcancel("列印更正申請書", f"用 Windows 預設程式列印單頁更正申請書？\n{path.name}",
+                                      parent=self.page):
+            return
+        self.task("送出更正申請書列印…", lambda: windows_open(path, "print"),
+                  lambda _: self.status.set("已交給 Windows 預設程式列印。"))
+
+    def saved_files(self):
+        self.task("讀取已儲存的 Rpx…", lambda: saved_rpx(self.output), self.show_saved_files)
+
+    def show_saved_files(self, files):
+        window = tk.Toplevel(self.page)
+        window.title("我存過的檔案")
+        window.transient(self.workbench.root)
+        tree = ttk.Treeview(window, columns=("name", "kind", "time"), show="headings", selectmode="browse")
+        for key, label, width in (("name", "檔名", 340), ("kind", "類型", 130), ("time", "時間", 155)):
+            tree.heading(key, text=label)
+            tree.column(key, width=width)
+        scroll = ttk.Scrollbar(window, command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        tree.pack(fill="both", expand=True, padx=8, pady=8)
+        for index, (path, kind, stamp) in enumerate(files):
+            tree.insert("", "end", iid=str(index), values=(path.name, kind, f"{stamp:%Y-%m-%d %H:%M:%S}"))
+
+        def selected():
+            selection = tree.selection()
+            return files[int(selection[0])][0] if selection else None
+
+        def open_selected(_=None):
+            path = selected()
+            if path and not self.workbench.busy:
+                self.open_path(path)
+
+        def open_folder():
+            path = selected()
+            try:
+                windows_open(path.parent if path else self.output)
+            except (OSError, RpxError) as error:
+                self.show_error(error)
+
+        actions = ttk.Frame(window)
+        actions.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(actions, text="開啟", command=open_selected).pack(side="left")
+        ttk.Button(actions, text="開啟資料夾", command=open_folder).pack(side="left", padx=6)
+        tree.bind("<Double-1>", open_selected)
 
     def change(self, index, operation, *, save=False):
         def work():
             report = operation()
-            return report, report.pdf(cache_backgrounds=False)
+            differences = self.compare(report)[0] if self.differences is not None else None
+            return report, report.pdf(cache_backgrounds=False), differences
 
         def done(result):
-            report, pdf = result
+            report, pdf, self.differences = result
             self.install(report, pdf, index * 2, edited=True)
             if save:
                 self.save_rpx()

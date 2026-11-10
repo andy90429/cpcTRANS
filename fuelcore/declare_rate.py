@@ -13,6 +13,7 @@ from urllib.request import HTTPSHandler, HTTPRedirectHandler, ProxyHandler, buil
 
 from .db import Database
 from .settings import Settings, validate_test_database
+from .report.retention import mark_diagnostic
 
 
 BASE_URL = "https://portal.sw.nat.gov.tw/APGQ/GC331!downLoad?formBean.downLoadFile="
@@ -328,6 +329,7 @@ def run_rate_command(args):
             path = args.output / f"每旬匯率模擬_{datetime.now():%Y%m%d_%H%M%S}.txt"
             with path.open("x", encoding="utf-8-sig") as stream:
                 stream.write(report)
+            mark_diagnostic(path)
             print(path)
         else:
             print(report, end="")

@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import mkdtemp
 
 from ..db import Database
+from ..report.retention import mark_outputs
 from .xml import CODE, EdiError, SendXmlBuilder, XmlSettings, row_text, upper_keys
 
 
@@ -118,4 +119,5 @@ def simulate_send(settings, sersnos, output, *, now=None, connection=None):
         lines.append(f"略過 {sersno}：{reason}")
     lines.extend(("", f"規劃 {len(plans)} 張，略過 {len(rejections)} 張。"))
     (folder / "模擬結果.txt").write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8-sig"))
+    mark_outputs(folder, {name: "diag" for name in ("模擬結果.txt", *(plan.filename for plan in plans))})
     return SimulationResult(folder, len(plans), len(rejections))

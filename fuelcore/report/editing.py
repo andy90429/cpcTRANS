@@ -5,13 +5,16 @@ from contextlib import closing
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
+from itertools import count
 from pathlib import Path
+from tempfile import mkdtemp
 
 from ..db import Database
 from . import ReportBatch, prepare_report, report_resources, safe_destination
 from .calc import ItemInput, OriginalItem, Trial, ZERO, decimal_input
 from .declaration import DeclarationReader
 from .formula import format_value
+from .retention import mark_outputs
 from .rpx import RpxDocument, RpxError
 
 
@@ -139,14 +142,25 @@ def report_ids(settings, prefix="", *, connection=None):
     return [str(row[0]) for row in rows]
 
 
-def new_copy(folder, stem, suffix, content, assets):
+def new_copy(folder, stem, suffix, content, assets, *, category=None):
     folder = safe_destination(folder, assets)
     folder.mkdir(parents=True, exist_ok=True)
+    if category:
+        prefix = {"print": "列印", "generated": "產生", "correction": "更正"}[category]
+        folder = Path(mkdtemp(prefix=prefix + "_", dir=folder))
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    path = folder / f"{stem}_{stamp}{suffix}"
-    with path.open("xb") as stream:
-        stream.write(content)
-    return path
+    for index in count():
+        serial = f"_{index}" if index else ""
+        path = folder / f"{stem}_{stamp}{serial}{suffix}"
+        try:
+            stream = path.open("xb")
+        except FileExistsError:
+            continue
+        with stream:
+            stream.write(content)
+        if category:
+            mark_outputs(folder, {path.name: category})
+        return path
 
 
 @dataclass
@@ -163,12 +177,13 @@ class EditableReport:
         return cls(batch, document, deepcopy(batch.fronts), {})
 
     @classmethod
-    def open(cls, path, *, reports=None, cache=None):
+    def open(cls, path, *, reports=None, cache=None, backup=None):
         path = Path(path)
         if path.suffix.casefold() != ".rpx":
             raise RpxError("請選擇 .Rpx 報單檔")
         assets, cache = report_resources(reports, cache)
-        document = RpxDocument.read(path.read_bytes())
+        data = path.read_bytes()
+        document = RpxDocument.read(data)
         fronts = [page for page in document.roots if page.class_name == "TGPage"]
         ids, pages = [], []
         back = assets.page("N5203CUS.Rpt")
@@ -184,6 +199,8 @@ class EditableReport:
                 report_id = match[0]
             ids.append(report_id)
             pages.extend(((page, False), (deepcopy(back), True)))
+        if backup is not None:
+            new_copy(Path(backup) / "原檔備份", path.stem, path.suffix, data, assets)
         return cls(ReportBatch(ids, assets, cache, pages, fronts, []), document, deepcopy(fronts), {})
 
     def trial(self, index):
@@ -231,6 +248,10 @@ class EditableReport:
     def save(self, folder, index):
         return new_copy(folder, self.batch.ids[index], ".Rpx", self.document.to_bytes(), self.batch.assets)
 
+    def save_generated(self, folder):
+        return new_copy(folder, self.batch.ids[0], ".Rpx", self.document.to_bytes(), self.batch.assets,
+                        category="generated")
+
     def pdf(self, *, cache_backgrounds=True):
         from .pdf import render_pdf
 
@@ -238,4 +259,4 @@ class EditableReport:
         return render_pdf(self.batch.pages, self.batch.assets, cache, self.batch.warnings)
 
     def export_pdf(self, folder):
-        return new_copy(folder, self.batch.ids[0], ".pdf", self.pdf(), self.batch.assets)
+        return new_copy(folder, self.batch.ids[0], ".pdf", self.pdf(), self.batch.assets, category="print")

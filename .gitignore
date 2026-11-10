@@ -20,6 +20,7 @@ fuelcore_ships.json.*.tmp
 清晰底圖/
 列印輸出/
 診斷/
+.fuelcore-cleanup/
 原檔備份/
 .fuelcore-agent/
 *.[rR][pP][tT]

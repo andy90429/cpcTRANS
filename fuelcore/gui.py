@@ -12,6 +12,7 @@ from .edi import simulate_send
 from .logic_check import run_logic_check
 from .reply_view import ReplyPage
 from .report_view import ReportPage
+from .report.retention import daily_cleanup
 from .send_check import prepare, split_numbers
 from .settings import Settings, read_config
 from .settings_view import SettingsPages
@@ -176,6 +177,7 @@ class Workbench:
         self.update_cbs_status()
         self.root.after(60, self.poll)
         self.root.after_idle(self.refresh)
+        self.root.after(8000, self.cleanup_outputs)
         self.reply_page.restart_watch()
 
     def show(self, name):
@@ -216,6 +218,20 @@ class Workbench:
 
     def build_tools_page(self, page):
         self.tools_page = ToolsPage(self, page)
+
+    def cleanup_outputs(self):
+        if self.busy:
+            self.root.after(1000, self.cleanup_outputs)
+            return
+
+        def work():
+            settings = Settings.load(config_source(self.config_path))
+            return daily_cleanup(self.config_path.parent, settings.cleanup_days)
+
+        def reschedule(_):
+            self.root.after(3600000, self.cleanup_outputs)
+
+        self.run_task("正在清理過期輸出…", work, reschedule, reschedule)
 
     def build_send_page(self, page):
         page.columnconfigure(0, weight=1)
@@ -302,7 +318,8 @@ class Workbench:
         }
         if not approved:
             return
-        output = filedialog.askdirectory(title="選擇模擬送信輸出資料夾", parent=self.root)
+        output = filedialog.askdirectory(title="選擇模擬送信輸出資料夾", parent=self.root,
+                                         initialdir=self.config_path.parent)
         if not output:
             return
         numbers = [entry.sersno for entry in self.send_rows.values()]
