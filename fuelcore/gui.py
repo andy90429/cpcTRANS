@@ -153,6 +153,8 @@ class Workbench:
         self.rows = {}
         self.nav = {}
         self.pages = {}
+        self.active_page = None
+        self.edi_activation = None
         self.setting_actions = []
         self.settings_unlocked = False
         self.values = {key: tk.StringVar(value=DEFAULTS.get(key, "")) for key in (*PATH_FIELDS, *DB_FIELDS)}
@@ -196,8 +198,7 @@ class Workbench:
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
         for name, build in (("轉檔", self.build_convert_page), ("報單列印", self.build_report_page),
-                            ("送出前確認", self.build_send_page),
-                            ("海關回覆", self.build_reply_page),
+                            ("送收信", self.build_edi_page),
                             ("工具", self.build_tools_page),
                             ("設定", self.build_settings_page)):
             item = ttk.Frame(sidebar, style="Nav.TFrame")
@@ -231,11 +232,12 @@ class Workbench:
         if name == "設定" and not self.unlock_settings():
             return
         self.pages[name].tkraise()
+        self.active_page = name
         for key, (indicator, button) in self.nav.items():
             indicator.configure(style="Accent.TFrame" if key == name else "Nav.TFrame")
             button.configure(style="Current.Nav.TButton" if key == name else "Nav.TButton")
-        if name == "海關回覆":
-            self.reply_page.activate()
+        if name == "送收信":
+            self.activate_edi_tab()
 
     def raise_dialogs(self, event):
         if event.widget is not self.root:
@@ -272,8 +274,30 @@ class Workbench:
     def build_report_page(self, page):
         self.report_page = ReportPage(self, page)
 
-    def build_reply_page(self, page):
-        self.reply_page = ReplyPage(self, page, make_table)
+    def build_edi_page(self, page):
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
+        ttk.Label(page, text="送收信", style="Title.TLabel").grid(sticky="w", pady=(0, 12))
+        self.edi_tabs = ttk.Notebook(page)
+        self.edi_tabs.grid(sticky="nsew")
+        self.send_tab = ttk.Frame(self.edi_tabs, padding=12)
+        self.reply_tab = ttk.Frame(self.edi_tabs, padding=12)
+        self.edi_tabs.add(self.send_tab, text="送出前確認")
+        self.edi_tabs.add(self.reply_tab, text="今日回覆")
+        self.build_send_page(self.send_tab)
+        self.reply_page = ReplyPage(self, self.reply_tab, make_table)
+        self.edi_tabs.bind("<<NotebookTabChanged>>", self.activate_edi_tab)
+
+    def activate_edi_tab(self, _=None):
+        if self.edi_activation is not None:
+            self.root.after_cancel(self.edi_activation)
+            self.edi_activation = None
+        if self.active_page != "送收信" or self.edi_tabs.select() != str(self.reply_tab):
+            return
+        if self.busy:
+            self.edi_activation = self.root.after(200, self.activate_edi_tab)
+            return
+        self.reply_page.activate()
 
     def build_tools_page(self, page):
         self.tools_page = ToolsPage(self, page)

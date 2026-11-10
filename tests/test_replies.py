@@ -210,7 +210,12 @@ class RepliesTest(unittest.TestCase):
         root.after_cancel(page.timer)
         page.timer = None
         app.refresh = lambda: None
-        app.show("海關回覆")
+        app.show("送收信")
+        self.assertEqual([app.edi_tabs.tab(tab, "text") for tab in app.edi_tabs.tabs()],
+                         ["送出前確認", "今日回覆"])
+        self.assertEqual(app.edi_tabs.select(), str(app.send_tab))
+        app.send_numbers.insert(0, FIRST)
+        app.edi_tabs.select(app.reply_tab)
 
         def wait():
             deadline = time.monotonic() + 8
@@ -221,8 +226,15 @@ class RepliesTest(unittest.TestCase):
             self.assertFalse(page.watch_running)
             self.assertFalse(app.cleanup_running)
 
+        deadline = time.monotonic() + 8
+        while not page.loaded and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.01)
         wait()
         self.assertIn("1 則回覆，放行 1 張", page.status.get())
+        app.edi_tabs.select(app.send_tab)
+        self.assertEqual(app.send_numbers.get(), FIRST)
+        app.edi_tabs.select(app.reply_tab)
         row, = page.table.get_children()
         self.assertEqual(page.table.item(row, "tags"), ("成功",))
         page.table.selection_set(row)
