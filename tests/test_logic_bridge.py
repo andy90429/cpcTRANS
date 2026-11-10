@@ -83,6 +83,9 @@ def test_save_requires_test_database_and_opt_in(fake_plugin):
     assert run_logic_check([NUMBERS[0]], cfg, save=True).results[0].status == "error"
     assert not (folder / "started.json").exists()
     cfg.test_only = True
+    init_sqlite(cfg)
+    with closing(sqlite3.connect(cfg.path)) as db, db:
+        db.execute("INSERT INTO cusdec (MSGCODE, SERSNO, STATUS) VALUES (?, ?, ?)", ("5203S", NUMBERS[0], "0"))
     assert run_logic_check([NUMBERS[0]], cfg, save=True).results[0].saved
     assert started(folder)["save"] is True
 
@@ -168,7 +171,7 @@ def exercise_workbench(folder):
         workbench.check_button.invoke()
         assert workbench.busy
         wait()
-        assert workbench.files.set(row, "logic") == "✓ 通過"
+        assert workbench.files.set(row, "logic") == "邏輯檢查（F6）通過"
     finally:
         root.destroy()
 

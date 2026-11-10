@@ -96,6 +96,7 @@ class Settings:
         self.edi = EdiSettings.from_section(config["edi"]) if config.has_section("edi") else None
         self.printer = config.get("print", "printer", fallback="").strip()
         self.logic_check = LogicCheckSettings.load(config, base)
+        self.check_after_convert = config.getboolean("workflow", "check_after_convert", fallback=True)
 
     @classmethod
     def load(cls, path):

@@ -6,8 +6,9 @@ from datetime import date, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from .convert import MESSAGE, declaration_number, read_txt
+from .convert import MESSAGE, convert_file, declaration_number, read_txt
 from .db import Database
+from .logic_check import run_logic_check
 from .schema import identifier, init_sqlite
 from .settings import Settings, read_config
 
@@ -31,6 +32,9 @@ def load_fields(path):
     values = {key: config.get("paths", key, fallback="") for key in PATH_FIELDS}
     values.update({key: config.get("database", key, fallback=DEFAULTS.get(key, ""))
                    for key in DB_FIELDS})
+    values["check_after_convert"] = (
+        "yes" if config.getboolean("workflow", "check_after_convert", fallback=True) else "no"
+    )
     return values
 
 
@@ -56,6 +60,10 @@ def edited_config(path, values, *, check_paths=True):
     for field in DB_FIELDS:
         value = values[field]
         config["database"][field] = value if field == "password" else value.strip()
+    if "check_after_convert" in values:
+        if not config.has_section("workflow"):
+            config.add_section("workflow")
+        config["workflow"]["check_after_convert"] = values["check_after_convert"]
     if values["driver"] == "mysql":
         port = values["port"].strip()
         if not port.isdecimal() or len(port) > 5 or not 1 <= int(port) <= 65535:
@@ -187,6 +195,38 @@ def file_statuses(files, imported, failures):
 def prepare_database(settings):
     if settings.driver == "sqlite" and not settings.path.exists():
         init_sqlite(settings)
+
+
+def convert_batch(paths, settings, notify):
+    prepare_database(settings)
+    successful = []
+    for path in paths:
+        result = convert_file(path, settings)
+        notify(path, result)
+        if result.ok:
+            successful.append(result.sersno)
+    run = run_logic_check(successful, settings, save=True) if successful and settings.check_after_convert else None
+    return successful, run
+
+
+def check_summaries(ids, settings):
+    """Read the saved declaration names and item values for the result window."""
+    summaries = {}
+    try:
+        with closing(Database(settings, read_only=True)) as db:
+            for number in ids:
+                key = (MESSAGE, number)
+                headers = db.select("SELECT BANAME, BAID, BYNAME FROM cusdec WHERE MSGCODE = ? AND SERSNO = ?", key)
+                if not headers:
+                    continue
+                items = db.select(
+                    "SELECT `報單品名`, `貨品名稱`, `數量`, `數量單位` FROM invitem "
+                    "WHERE MSGCODE = ? AND SERSNO = ? ORDER BY PINVORDER", key,
+                )
+                summaries[number] = (headers[0], items)
+    except Exception:
+        return summaries, "部分報單資料無法讀取，邏輯檢查結果仍可查看。"
+    return summaries, ""
 
 
 def test_database(settings):

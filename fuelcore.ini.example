@@ -13,6 +13,9 @@ path = fuelcore_test.sqlite3
 [print]
 printer =
 
+[workflow]
+check_after_convert = yes
+
 [logic_check]
 ; FUELCORE_LOGIC_PLUGIN can override this example path.
 plugin_dir = C:\example\只放本機_邏輯檢查外掛

@@ -6,11 +6,13 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from contextlib import closing
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Optional, Tuple
 
+from .db import Database
 from .settings import validate_test_database
 
 
@@ -125,6 +127,36 @@ def run_logic_check(sersnos, settings, save=False):
         config = connection_info(settings, save)
     except (OSError, ValueError, KeyError):
         return errors(ids, "邏輯檢查拒絕連線。請確認 test_only = yes、測試庫名稱與 [logic_check] 規則庫設定。")
+    if not save:
+        return _run_plugin(ids, settings, save, config)
+    try:
+        with closing(Database(settings, read_only=True)) as db:
+            states = {}
+            for start in range(0, len(ids), 300):
+                batch = ids[start:start + 300]
+                markers = ", ".join("?" for _ in batch)
+                rows = db.select(f"SELECT SERSNO, STATUS FROM cusdec WHERE MSGCODE = ? AND SERSNO IN ({markers})",
+                                 ("5203S", *batch))
+                states.update((number.upper(), (status or "").strip()) for number, status in rows)
+    except Exception:
+        return errors(ids, "無法確認測試庫報單狀態，已拒絕寫回。")
+    allowed, rejected = [], {}
+    for number in ids:
+        if number not in states:
+            message = "測試庫找不到這張報單，已拒絕寫回。"
+        elif states[number] not in ("Y", "0", ""):
+            message = "報單已送出、已有回覆或狀態不允許，已拒絕寫回邏輯檢查結果。"
+        else:
+            allowed.append(number)
+            continue
+        rejected[number] = errors((number,), message).results[0]
+    run = _run_plugin(allowed, settings, save, config) if allowed else CheckRun("", ())
+    by_number = {result.sersno: result for result in run.results}
+    by_number.update(rejected)
+    return CheckRun(run.plugin_version, tuple(by_number[number] for number in ids))
+
+
+def _run_plugin(ids, settings, save, config):
     options = settings.logic_check
     plugin = os.environ.get("FUELCORE_LOGIC_PLUGIN") or options.plugin_dir
     script = Path(plugin).resolve() / "run_check.py" if plugin else None

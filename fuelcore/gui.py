@@ -5,13 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
 
-from .convert import convert_file
 from .logic_check import run_logic_check
 from .report_view import ReportPage
 from .settings import Settings
 from .workbench import (
     DB_FIELDS, DEFAULTS, FAILED, IMPORTED, PATH_FIELDS, PENDING, UNREADABLE,
-    config_source, edited_config, load_fields, prepare_database, resolve_folder,
+    check_summaries, config_source, convert_batch, edited_config, load_fields, resolve_folder,
     save_fields, scan_inputs, test_database,
 )
 
@@ -100,11 +99,14 @@ class Workbench:
         self.extra = set()
         self.failures = {}
         self.checks = {}
+        self.conversions = {}
+        self.write_check = tk.BooleanVar(value=False)
         self.rows = {}
         self.nav = {}
         self.pages = {}
         self.setting_actions = []
         self.values = {key: tk.StringVar(value=DEFAULTS.get(key, "")) for key in (*PATH_FIELDS, *DB_FIELDS)}
+        self.values["check_after_convert"] = tk.StringVar(value="yes")
         self.source_text = tk.StringVar(value="尚未指定 TXT 來源目錄")
         self.summary = tk.StringVar()
         self.show_all = tk.BooleanVar(value=False)
@@ -175,7 +177,7 @@ class Workbench:
         source = ttk.Frame(page, style="Card.TFrame", padding=14)
         source.grid(row=1, column=0, sticky="nsew", pady=(0, 12))
         source.columnconfigure(0, weight=1)
-        source.rowconfigure(3, weight=1)
+        source.rowconfigure(4, weight=1)
         ttk.Label(source, text="TXT 來源目錄", style="CardTitle.TLabel").grid(sticky="w")
         ttk.Label(source, textvariable=self.source_text, style="Hint.TLabel").grid(sticky="ew", pady=(2, 9))
         bar = ttk.Frame(source, style="Card.TFrame", borderwidth=0)
@@ -186,16 +188,20 @@ class Workbench:
         self.add_button.pack(side="left", padx=(0, 8))
         self.refresh_button = ttk.Button(bar, text="重新整理", command=self.refresh)
         self.refresh_button.pack(side="left")
-        self.check_button = ttk.Button(bar, text="邏輯檢查", command=self.check_selected, state="disabled")
-        self.check_button.pack(side="left", padx=(8, 0))
         self.show_all_button = ttk.Checkbutton(bar, text="顯示全部", variable=self.show_all,
                                                command=self.refresh)
         self.show_all_button.pack(side="left", padx=(12, 0))
         ttk.Label(bar, textvariable=self.summary, style="Hint.TLabel").pack(side="right", padx=8)
+        check_bar = ttk.Frame(source, style="Card.TFrame", borderwidth=0)
+        check_bar.grid(sticky="ew", pady=(0, 9))
+        self.check_button = ttk.Button(check_bar, text="邏輯檢查", command=self.check_selected, state="disabled")
+        self.check_button.pack(side="left")
+        self.write_check_button = ttk.Checkbutton(check_bar, text="寫回結果", variable=self.write_check)
+        self.write_check_button.pack(side="left", padx=(6, 0))
         panel, self.files = make_table(source, (
             ("name", "檔名", 240, True), ("folder", "日期資料夾", 116, False),
             ("sersno", "報單號碼", 165, False), ("status", "狀態", 103, False),
-            ("logic", "邏輯檢查", 125, False),
+            ("logic", "邏輯檢查", 190, False),
         ), "extended")
         panel.grid(sticky="nsew")
         self.files.configure(height=7)
@@ -252,6 +258,10 @@ class Workbench:
             self.mysql_entries.append(self.setting_entry(db, row, field, label, column))
         ttk.Label(db, text="MySQL 報單與代碼資料庫名稱需符合 test 命名規則。",
                   style="Hint.TLabel").grid(row=5, columnspan=4, sticky="w", pady=(5, 0))
+        auto_check = ttk.Checkbutton(page, text="轉完自動檢查（跟 CBS 按 F6 一樣）",
+                                    variable=self.values["check_after_convert"], onvalue="yes", offvalue="no")
+        auto_check.grid(sticky="w", pady=(8, 0))
+        self.setting_actions.append(auto_check)
         actions = ttk.Frame(page)
         actions.grid(sticky="ew", pady=(12, 6))
         for title, action, style in (("儲存設定", self.save, "Primary.TButton"),
@@ -346,26 +356,43 @@ class Workbench:
 
         def work():
             settings = Settings.load(config_source(self.config_path))
-            prepare_database(settings)
-            for path in paths:
-                result = convert_file(path, settings)
+
+            def notify(path, result):
                 if result.ok:
                     failures.pop(path, None)
                 else:
                     failures[path] = result.message or "轉檔失敗"
                 self.events.put(("conversion", (path, result)))
-            return scan_inputs(self.config_path, extra, failures, show_all=show_all), failures
+
+            ids, run = convert_batch(paths, settings, notify)
+            summaries, warning = check_summaries(ids, settings) if ids else ({}, "")
+            scan = scan_inputs(self.config_path, extra, failures, show_all=show_all)
+            return scan, failures, ids, run, summaries, warning, settings.check_after_convert
 
         def finish(value):
-            scan, self.failures = value
+            scan, self.failures, ids, run, summaries, warning, auto = value
+            if run is not None:
+                self.record_checks(run)
             self.show_files(scan)
+            if run is not None:
+                self.check_window(ids, summaries, warning, save=True)
+            elif not auto:
+                lines = ["這次沒有執行邏輯檢查（F6）。"]
+                for number in ids:
+                    lines.append(f"{number} {self.call_note(number, summaries)}")
+                if warning:
+                    lines.append(warning)
+                self.add_log("提醒", "\n".join(lines))
+                messagebox.showinfo("轉檔完成", "\n".join(lines), parent=self.root)
 
-        self.run_task("正在轉檔…", work, finish)
+        self.run_task("正在轉檔與處理檢查…", work, finish)
 
     def show_result(self, result_event):
         path, result = result_event
         if result.ok:
-            self.checks.pop(result.sersno, None)
+            number = result.sersno.upper()
+            self.checks.pop(number, None)
+            self.conversions[number] = result
         label = f"{path.name}（{result.sersno}）" if result.sersno else path.name
         for note in reversed(result.notes):
             self.add_log("提醒", note)
@@ -373,52 +400,114 @@ class Workbench:
         self.add_log("成功" if result.ok else "失敗", f"{label}：{message}")
 
     def check_label(self, file):
-        result = self.checks.get(file.sersno)
-        return (result.label if result else "未檢查") if file.status == IMPORTED else ""
+        result = self.checks.get(file.sersno.upper())
+        if file.status != IMPORTED:
+            return ""
+        return {"✓ 通過": "邏輯檢查（F6）通過", "✗ 未通過": "邏輯檢查（F6）未通過"}.get(
+            result.label if result else "", "未檢查")
 
     def check_selected(self):
         ids = list(dict.fromkeys(self.rows[row].sersno for row in self.files.selection()
                                  if row in self.rows and self.rows[row].status == IMPORTED))
         if not ids:
             return
+        self.check_ids(ids, save=self.write_check.get())
 
+    def check_ids(self, ids, *, save=False, render=None):
         def work():
             try:
                 settings = Settings.load(config_source(self.config_path))
             except (ValueError, OSError, KeyError):
                 raise ValueError("無法讀取 fuelcore 測試庫設定。請核對 test_only 與資料庫名稱。") from None
-            return run_logic_check(ids, settings)
+            run = run_logic_check(ids, settings, save=save)
+            return run, *check_summaries(ids, settings)
 
-        def finish(run):
-            for result in run.results:
-                self.checks[result.sersno] = result
-                self.add_log("成功" if result.passed else "提醒", f"{result.sersno} {result.label}")
-            for row, file in self.rows.items():
-                if file.sersno in ids:
-                    self.files.set(row, "logic", self.check_label(file))
+        def finish(value):
+            run, summaries, warning = value
+            self.record_checks(run)
+            if render:
+                render(summaries, warning)
+            else:
+                self.check_window(ids, summaries, warning, save=save)
 
         self.run_task("正在執行邏輯檢查…", work, finish,
                       lambda message: messagebox.showerror("邏輯檢查", message, parent=self.root))
 
+    def record_checks(self, run):
+        for result in run.results:
+            self.checks[result.sersno] = result
+            self.add_log("成功" if result.passed else "提醒", f"{result.sersno} {result.label}")
+        for row, file in self.rows.items():
+            if file.sersno.upper() in self.checks:
+                self.files.set(row, "logic", self.check_label(file))
+
+    def call_note(self, number, summaries):
+        result = self.conversions.get(number.upper())
+        notes = [note for note in result.notes if note.startswith("呼號（F2）：")] if result else []
+        if notes:
+            return "；".join(notes)
+        header, _ = summaries.get(number, (("", "", ""), ()))
+        return f"呼號（F2）：{header[1] or '未取得呼號'}"
+
     def show_check_detail(self, event):
         row = self.files.identify_row(event.y)
         file = self.rows.get(row)
-        result = self.checks.get(file.sersno) if file and file.status == IMPORTED else None
-        if result is None:
+        if not file or file.status != IMPORTED or file.sersno.upper() not in self.checks:
             return
+        ids = (file.sersno,)
+
+        def work():
+            settings = Settings.load(config_source(self.config_path))
+            return check_summaries(ids, settings)
+
+        self.run_task("正在讀取檢查結果…", work, lambda value: self.check_window(ids, *value))
+
+    def check_window(self, ids, summaries, warning, *, save=False):
         window = tk.Toplevel(self.root)
-        window.title(f"{result.sersno} · {result.label}")
+        window.title("檢查結果")
         window.transient(self.root)
-        body = tk.Text(window, width=72, height=18, wrap="word")
-        scrollbar = ttk.Scrollbar(window, orient="vertical", command=body.yview)
+        panel = ttk.Frame(window)
+        panel.pack(fill="both", expand=True)
+        body = tk.Text(panel, width=84, height=24, wrap="word")
+        scrollbar = ttk.Scrollbar(panel, orient="vertical", command=body.yview)
         body.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         body.pack(side="left", fill="both", expand=True)
-        body.insert("end", f"{result.label}　執行 {result.rules_total} 條，無法檢查 {result.rules_unparsed} 條\n")
-        for message in result.messages:
-            item = f"第 {message.item} 項 " if message.item else ""
-            body.insert("end", f"\n[{message.level}] {item}{message.rule_id} {message.field}\n{message.text}\n")
-        body.configure(state="disabled")
+        def render(summaries, warning):
+            if not window.winfo_exists():
+                return
+            body.configure(state="normal")
+            body.delete("1.0", "end")
+            if warning:
+                body.insert("end", warning + "\n\n")
+            for number in ids:
+                result = self.checks[number.upper()]
+                header, items = summaries.get(number, (("", "", ""), ()))
+                ship, call, buyer = header
+                body.insert("end", f"{number}　{result.label}　執行 {result.rules_total} 條，"
+                                   f"無法檢查 {result.rules_unparsed} 條\n")
+                body.insert("end", f"船名：{ship or '—'}（{call or '無呼號'}）　買方：{buyer or '—'}\n")
+                for index, (name, fallback, quantity, unit) in enumerate(items, 1):
+                    product = " ".join((name or fallback or "—").split())
+                    body.insert("end", f"第 {index} 項　{product}　{quantity} {unit}\n")
+                for message in result.messages:
+                    item = f"第 {message.item} 項 " if message.item else ""
+                    body.insert("end", f"[{message.level}] {item}{message.rule_id} {message.field} {message.text}\n")
+                conversion = self.conversions.get(number.upper())
+                notes = conversion.notes if conversion else ()
+                body.insert("end", "轉檔說明\n")
+                if not any(note.startswith("呼號（F2）：") for note in notes):
+                    body.insert("end", self.call_note(number, summaries) + "\n")
+                for note in notes:
+                    body.insert("end", note + "\n")
+                body.insert("end", "\n")
+            body.configure(state="disabled")
+
+        actions = ttk.Frame(window, padding=8)
+        actions.pack(fill="x")
+        ttk.Button(actions, text="重新檢查", command=lambda: self.check_ids(ids, save=save, render=render)).pack(side="left")
+        ttk.Button(actions, text="關閉", command=window.destroy).pack(side="right")
+        render(summaries, warning)
 
     def current_fields(self):
         return {key: value.get() for key, value in self.values.items()}
@@ -439,6 +528,7 @@ class Workbench:
         def finish(scan):
             self.failures.clear()
             self.checks.clear()
+            self.conversions.clear()
             self.show_feedback(f"已儲存 {self.config_path}")
             self.show_files(scan)
 
@@ -467,6 +557,7 @@ class Workbench:
         can_check = not self.busy and any(self.rows[row].status == IMPORTED
                                           for row in self.files.selection() if row in self.rows)
         self.check_button.state(["!disabled" if can_check else "disabled"])
+        self.write_check_button.state(["!disabled" if can_check else "disabled"])
         for button in [self.add_button, self.refresh_button, self.show_all_button, *self.setting_actions]:
             button.state(["disabled" if self.busy else "!disabled"])
 
