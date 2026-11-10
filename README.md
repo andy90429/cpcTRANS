@@ -126,6 +126,14 @@ SQLite 測試庫的小數與日期欄位宣告為 `TEXT DECIMAL(…)`、`TEXT DA
 
 ## 送信模擬
 
+工作台的「送出前確認」可輸入多個報單號碼，以空白或逗號分隔。按「檢查」後，紅字表示不能送，橘字表示有提醒，選取報單即可查看原因。選取可模擬的報單，按「模擬送信」並逐張確認提醒。模擬只在選定資料夾輸出 XML 和結果報告，資料庫全程唯讀。
+
+```powershell
+python -m fuelcore send-check TEST00A10E0777 TEST00A10E0781 --config fuelcore.ini
+```
+
+CLI 檢查發現不能送的報單時回傳退出碼 `1`，只有提醒時回傳 `0`。沒有 EDI 測試表或船舶代碼表時，略過對應的歷史或船名比對。
+
 在自己的 `fuelcore.ini` 新增 `[edi]`。MySQL 會透過同一組連線查詢報單、EDI 與 XML 設定測試庫。`company_code` 是檔名使用的 8 碼公司代碼，`user` 用於擬新增的送信紀錄。SQLite 測試可將測試資料表放在同一個檔案。
 
 ```ini

@@ -4,9 +4,12 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
 
+from .edi import simulate_send
 from .logic_check import run_logic_check
 from .report_view import ReportPage
+from .send_check import prepare, split_numbers
 from .settings import Settings
 from .workbench import (
     DB_FIELDS, DEFAULTS, FAILED, IMPORTED, PATH_FIELDS, PENDING, UNREADABLE,
@@ -100,6 +103,7 @@ class Workbench:
         self.failures = {}
         self.checks = {}
         self.conversions = {}
+        self.send_rows = {}
         self.write_check = tk.BooleanVar(value=False)
         self.rows = {}
         self.nav = {}
@@ -136,6 +140,7 @@ class Workbench:
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
         for name, build in (("轉檔", self.build_convert_page), ("報單列印", self.build_report_page),
+                            ("送出前確認", self.build_send_page),
                             ("設定", self.build_settings_page)):
             item = ttk.Frame(sidebar, style="Nav.TFrame")
             item.pack(fill="x", pady=2)
@@ -168,6 +173,121 @@ class Workbench:
 
     def build_report_page(self, page):
         self.report_page = ReportPage(self, page)
+
+    def build_send_page(self, page):
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(2, weight=2)
+        page.rowconfigure(3, weight=1)
+        ttk.Label(page, text="送出前確認", style="Title.TLabel").grid(sticky="w", pady=(0, 12))
+        controls = ttk.Frame(page)
+        controls.grid(sticky="ew", pady=(0, 10))
+        controls.columnconfigure(1, weight=1)
+        ttk.Label(controls, text="報單號碼（空白或逗號分隔）").grid(row=0, column=0, sticky="w")
+        self.send_numbers = ttk.Entry(controls)
+        self.send_numbers.grid(row=0, column=1, sticky="ew", padx=8)
+        self.send_numbers.bind("<Return>", lambda _: self.check_before_send())
+        self.send_check_button = ttk.Button(controls, text="檢查", command=self.check_before_send,
+                                            style="Primary.TButton")
+        self.send_check_button.grid(row=0, column=2)
+        self.simulate_button = ttk.Button(controls, text="模擬送信", command=self.simulate_selected_send,
+                                          state="disabled")
+        self.simulate_button.grid(row=0, column=3, padx=(8, 0))
+        panel, self.send_table = make_table(page, (
+            ("number", "報單號碼", 155, False), ("ship", "船名（呼號）", 185, True),
+            ("buyer", "買方", 145, True), ("items", "項次", 165, True), ("result", "結果", 82, False),
+        ), "extended")
+        panel.grid(sticky="nsew")
+        self.send_table.bind("<<TreeviewSelect>>", self.show_send_details)
+        self.send_details = ScrolledText(page, height=6, wrap="word", state="disabled")
+        self.send_details.grid(sticky="nsew", pady=(8, 0))
+        ttk.Label(page, textvariable=self.task_status).grid(sticky="w", pady=(7, 0))
+
+    def check_before_send(self):
+        if self.busy:
+            return
+        numbers = split_numbers((self.send_numbers.get(),))
+        if not numbers:
+            messagebox.showinfo("送出前確認", "請提供至少一個報單號碼。", parent=self.root)
+            return
+        self.show_send_results(())
+        self.run_task("正在檢查報單…", lambda: prepare(numbers, Settings.load(config_source(self.config_path))),
+                      self.show_send_results, self.send_error)
+
+    def show_send_results(self, results):
+        self.send_table.delete(*self.send_table.get_children())
+        self.send_rows.clear()
+        for entry in results:
+            tag = "失敗" if not entry.can_send else "提醒" if entry.warnings else "成功"
+            items = "、".join(f"{item.number}. {item.name}" for item in entry.items)
+            row = self.send_table.insert(
+                "", "end", values=(entry.sersno, f"{entry.ship_name}（{entry.call_sign or '無呼號'}）",
+                                   entry.buyer, items, entry.label), tags=(tag,),
+            )
+            self.send_rows[row] = entry
+        if self.send_rows:
+            self.send_table.selection_set(next(iter(self.send_rows)))
+        self.show_send_details()
+
+    def selected_send_rows(self):
+        return [self.send_rows[row] for row in self.send_table.selection() if row in self.send_rows]
+
+    def show_send_details(self, _=None):
+        lines = []
+        for entry in self.selected_send_rows():
+            lines.append(f"{entry.sersno}　{entry.label}　STATUS={entry.status or '—'}")
+            for label, messages in (("錯誤", entry.errors), ("不能送", entry.blocks), ("提醒", entry.warnings)):
+                lines.extend(f"{label}：{message}" for message in messages)
+            lines.extend(f"第 {item.number} 項　{item.name}　{item.quantity if item.quantity is not None else '—'} "
+                         f"{item.unit}" for item in entry.items)
+            lines.append("")
+        self.send_details.configure(state="normal")
+        self.send_details.delete("1.0", "end")
+        self.send_details.insert("1.0", "\n".join(lines))
+        self.send_details.configure(state="disabled")
+        self.update_buttons()
+
+    def simulate_selected_send(self):
+        if self.busy:
+            return
+        selected = [entry for entry in self.selected_send_rows() if entry.can_send]
+        approved = {
+            entry.sersno: entry.warnings for entry in selected
+            if not entry.warnings or messagebox.askyesno(
+                "確認提醒", entry.sersno + "\n\n" + "\n".join(entry.warnings) + "\n\n是否繼續模擬這張報單？",
+                parent=self.root,
+            )
+        }
+        if not approved:
+            return
+        output = filedialog.askdirectory(title="選擇模擬送信輸出資料夾", parent=self.root)
+        if not output:
+            return
+        numbers = [entry.sersno for entry in self.send_rows.values()]
+
+        def work():
+            settings = Settings.load(config_source(self.config_path))
+            results = prepare(numbers, settings)
+            eligible = [entry.sersno for entry in results if entry.sersno in approved and entry.can_send
+                        and set(entry.warnings) <= set(approved[entry.sersno])]
+            skipped = len(approved) - len(eligible)
+            simulation = simulate_send(settings, eligible, Path(output)) if eligible else None
+            return results, simulation, skipped
+
+        def finish(value):
+            results, simulation, skipped = value
+            self.show_send_results(results)
+            lines = []
+            if simulation is not None:
+                lines.append(f"規劃 {simulation.planned} 張，模擬略過 {simulation.rejected} 張。")
+                lines.append(str(simulation.directory / "模擬結果.txt"))
+            if skipped:
+                lines.append(f"{skipped} 張的狀態或提醒已變更，請查看最新結果並重新確認。")
+            messagebox.showinfo("模擬送信", "\n".join(lines), parent=self.root)
+
+        self.run_task("正在模擬送信…", work, finish, self.send_error)
+
+    def send_error(self, message):
+        messagebox.showerror("送出前確認", message, parent=self.root)
 
     def build_convert_page(self, page):
         page.columnconfigure(0, weight=1)
@@ -529,6 +649,7 @@ class Workbench:
             self.failures.clear()
             self.checks.clear()
             self.conversions.clear()
+            self.show_send_results(())
             self.show_feedback(f"已儲存 {self.config_path}")
             self.show_files(scan)
 
@@ -558,6 +679,9 @@ class Workbench:
                                           for row in self.files.selection() if row in self.rows)
         self.check_button.state(["!disabled" if can_check else "disabled"])
         self.write_check_button.state(["!disabled" if can_check else "disabled"])
+        can_simulate = not self.busy and any(entry.can_send for entry in self.selected_send_rows())
+        self.simulate_button.state(["!disabled" if can_simulate else "disabled"])
+        self.send_check_button.state(["disabled" if self.busy else "!disabled"])
         for button in [self.add_button, self.refresh_button, self.show_all_button, *self.setting_actions]:
             button.state(["disabled" if self.busy else "!disabled"])
 

@@ -42,6 +42,9 @@ def main():
     check.add_argument("--config", default="fuelcore.ini")
     check.add_argument("--save", action="store_true", help="將結果寫入測試庫")
     check.add_argument("--output", type=Path, help="另存 JSON 結果")
+    send_check = commands.add_parser("send-check", help="唯讀檢查報單是否可模擬送信")
+    send_check.add_argument("sersno", nargs="+")
+    send_check.add_argument("--config", default="fuelcore.ini")
     simulate = commands.add_parser("simulate-send", help="在測試庫以唯讀方式規劃送信")
     simulate.add_argument("sersno", nargs="+")
     simulate.add_argument("--config", required=True)
@@ -87,6 +90,8 @@ def main():
         return 0
     if args.command == "check":
         return run_check_command(args)
+    if args.command == "send-check":
+        return run_send_check_command(args)
     settings = Settings.load(args.config)
     if args.command == "print-report":
         from fuelcore.report.printing import print_report
@@ -138,6 +143,27 @@ def main():
                 print(sql, end="")
         return 0
     return run_conversion(args.txt, settings)
+
+
+def run_send_check_command(args):
+    from fuelcore.send_check import prepare, split_numbers
+
+    numbers = split_numbers(args.sersno)
+    if not numbers:
+        print("請提供至少一個報單號碼。", file=sys.stderr)
+        return 1
+    try:
+        settings = Settings.load(args.config)
+    except (OSError, ValueError, KeyError):
+        print("無法讀取 fuelcore 測試庫設定。", file=sys.stderr)
+        return 1
+    results = prepare(numbers, settings)
+    for entry in results:
+        print(f"{entry.sersno} {entry.label}")
+        for label, messages in (("錯誤", entry.errors), ("不能送", entry.blocks), ("提醒", entry.warnings)):
+            for message in messages:
+                print(f"  {label}：{message}")
+    return int(any(not entry.can_send for entry in results))
 
 
 def forward_cli(folder):

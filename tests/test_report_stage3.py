@@ -227,7 +227,13 @@ class EditableReportTest(unittest.TestCase):
             root = tk.Tk()
         except tk.TclError as error:
             self.skipTest(str(error))
-        self.addCleanup(root.destroy)
+
+        def destroy():
+            for callback in root.tk.call("after", "info"):
+                root.after_cancel(callback)
+            root.destroy()
+
+        self.addCleanup(destroy)
         root.withdraw()
         app = Workbench(root, self.output / "fuelcore.ini")
         app.refresh = lambda: None
