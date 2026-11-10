@@ -274,6 +274,18 @@ class EditableReportTest(unittest.TestCase):
             await_task()
             self.assertEqual(page.pages.current(), 0)
             self.assertEqual(len(page.pages["values"]), 4)
+            with patch.object(page.canvas, "winfo_width", return_value=1124), \
+                    patch.object(page.canvas, "winfo_height", return_value=824), \
+                    patch.object(page.canvas, "winfo_fpixels", return_value=144):
+                page.preview()
+                self.assertLessEqual(abs(page.image.width() - 1100), 1)
+                page.zoom.set("整頁")
+                page.preview()
+                self.assertLessEqual(abs(page.image.height() - 800), 1)
+                page.zoom.set("150%")
+                page.preview()
+                self.assertGreater(page.image.width(), 1500)
+                page.zoom.set("符合寬度")
             self.assertTrue(page.buttons["另存 Rpx"].instate(["disabled"]))
             files = set(self.output.rglob("*"))
             dialog = page.open_trial()

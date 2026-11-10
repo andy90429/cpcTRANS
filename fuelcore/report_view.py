@@ -3,6 +3,7 @@
 import os
 import re
 import stat
+from math import sqrt
 import tkinter as tk
 from contextlib import closing
 from datetime import datetime
@@ -19,6 +20,22 @@ from .report.rpx import RpxError
 from .settings import Settings
 from .runtime import record
 from .workbench import config_source
+
+
+ZOOM_LEVELS = ("符合寬度", "整頁", "100%", "125%", "150%", "200%", "300%")
+PREVIEW_MARGIN = 12
+MAX_PREVIEW_PIXELS = 24_000_000
+
+
+def preview_scale(mode, viewport, paper, dpi):
+    width, height = paper
+    if mode in ZOOM_LEVELS[:2]:
+        fit_width = max(1, viewport[0] - 2 * PREVIEW_MARGIN) / width
+        fit_height = max(1, viewport[1] - 2 * PREVIEW_MARGIN) / height
+        scale = min(fit_width, fit_height) if mode == "整頁" else fit_width
+    else:
+        scale = int(mode.rstrip("%")) / 100 * dpi / 72
+    return min(scale, sqrt(MAX_PREVIEW_PIXELS / (width * height)))
 
 
 def windows_open(path, action="open"):
@@ -71,7 +88,9 @@ class ReportPage:
         self.selection = tk.StringVar()
         self.number = tk.StringVar()
         self.status = tk.StringVar(value="請輸入報單號碼或開啟 Rpx 副本。")
-        self.zoom = tk.BooleanVar()
+        self.zoom = tk.StringVar(value=ZOOM_LEVELS[0])
+        self.preview_timer = None
+        self.preview_key = None
 
         page.columnconfigure(0, weight=1)
         page.rowconfigure(4, weight=1)
@@ -96,7 +115,7 @@ class ReportPage:
             ("另存 Rpx", self.save_rpx), ("列印更正申請書", self.print_correction),
         )):
             button = ttk.Button(actions, text=label, command=command, state="disabled")
-            button.grid(row=index // 3, column=index % 3, sticky="ew", padx=(0, 6), pady=2)
+            button.grid(row=index // 4, column=index % 4, sticky="ew", padx=(0, 6), pady=2)
             self.buttons[label] = button
         pager = ttk.Frame(page)
         pager.grid(sticky="ew", pady=(0, 6))
@@ -104,13 +123,16 @@ class ReportPage:
         self.pages = ttk.Combobox(pager, textvariable=self.selection, state="readonly", width=27)
         self.pages.pack(side="left")
         self.pages.bind("<<ComboboxSelected>>", self.select_page)
-        ttk.Checkbutton(pager, text="放大", variable=self.zoom, command=self.preview).pack(side="left", padx=10)
+        ttk.Label(pager, text="縮放").pack(side="left", padx=(12, 5))
+        zoom = ttk.Combobox(pager, textvariable=self.zoom, values=ZOOM_LEVELS, state="readonly", width=9)
+        zoom.pack(side="left", padx=(0, 10))
+        zoom.bind("<<ComboboxSelected>>", lambda _: self.preview())
         ttk.Label(pager, textvariable=self.dirty_notice, foreground="#b54708").pack(side="left")
         view = ttk.Frame(page, style="Card.TFrame")
         view.grid(sticky="nsew")
         view.rowconfigure(0, weight=1)
         view.columnconfigure(0, weight=1)
-        self.canvas = tk.Canvas(view, background="#f3f5f8", highlightthickness=0, width=1, height=1)
+        self.canvas = tk.Canvas(view, background="#dce5ee", highlightthickness=0, width=1, height=1)
         scroll_y = ttk.Scrollbar(view, orient="vertical", command=self.canvas.yview)
         scroll_x = ttk.Scrollbar(view, orient="horizontal", command=self.canvas.xview)
         self.canvas.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
@@ -118,7 +140,8 @@ class ReportPage:
         scroll_y.grid(row=0, column=1, sticky="ns")
         scroll_x.grid(row=1, column=0, sticky="ew")
         self.canvas.bind("<MouseWheel>", lambda event: self.canvas.yview_scroll(-int(event.delta / 120), "units"))
-        self.canvas.bind("<Configure>", self.position_preview)
+        self.canvas.bind("<Control-MouseWheel>", self.wheel_zoom)
+        self.canvas.bind("<Configure>", self.resize_preview)
         self.diff_panel = ttk.Frame(view, padding=5)
         self.diff_panel.grid(row=0, column=2, sticky="nsew")
         ttk.Label(self.diff_panel, text="資料庫比對差異").pack(anchor="w")
@@ -202,6 +225,7 @@ class ReportPage:
 
     def install(self, report, pdf, index=0, *, edited=False):
         self.report, self.pdf = report, pdf
+        self.preview_key = None
         if not edited:
             self.saved_report, self.saved_pdf = report, pdf
             self.saved_differences = self.differences
@@ -274,34 +298,68 @@ class ReportPage:
         elif answer is False:
             (discard or proceed)()
 
-    def preview(self):
-        if self.pdf is None:
+    def wheel_zoom(self, event):
+        current = ZOOM_LEVELS.index(self.zoom.get())
+        if current < 2:
+            if self.preview_key is None:
+                return "break"
+            current_percent = self.preview_key[1] * 72 * 100 / self.canvas.winfo_fpixels("1i")
+            choices = [(index, int(level.rstrip("%"))) for index, level in enumerate(ZOOM_LEVELS[2:], 2)]
+            if event.delta > 0:
+                current = next((index for index, percent in choices if percent > current_percent + 1), current)
+            else:
+                current = next((index for index, percent in reversed(choices) if percent < current_percent - 1), 1)
+        else:
+            current = max(1, min(len(ZOOM_LEVELS) - 1, current + (1 if event.delta > 0 else -1)))
+        self.zoom.set(ZOOM_LEVELS[current])
+        self.preview()
+        return "break"
+
+    def resize_preview(self, _=None):
+        self.position_preview()
+        if self.pdf is None or (self.preview_key is not None and self.zoom.get() not in ZOOM_LEVELS[:2]):
             return
+        if self.preview_timer is not None:
+            self.canvas.after_cancel(self.preview_timer)
+        self.preview_timer = self.canvas.after(100, lambda: self.preview(reset_scroll=False))
+
+    def preview(self, *, reset_scroll=True):
+        if self.preview_timer is not None:
+            self.canvas.after_cancel(self.preview_timer)
+            self.preview_timer = None
+        viewport = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if self.pdf is None or min(viewport) <= 2 * PREVIEW_MARGIN:
+            return
+        index = self.selected_page
         try:
             import pypdfium2
             from PIL import ImageTk
 
-            with closing(pypdfium2.PdfDocument(self.pdf)) as pdf, closing(pdf[self.pages.current()]) as page:
-                fit = min((self.canvas.winfo_width() - 24) / page.get_width(),
-                          (self.canvas.winfo_height() - 24) / page.get_height())
-                scale = 1.55 if self.zoom.get() else max(0.40, min(0.85, fit))
+            with closing(pypdfium2.PdfDocument(self.pdf)) as pdf, closing(pdf[index]) as page:
+                scale = preview_scale(self.zoom.get(), viewport, (page.get_width(), page.get_height()),
+                                      self.canvas.winfo_fpixels("1i"))
+                key = index, round(scale, 3)
+                if key == self.preview_key:
+                    return
                 with closing(page.render(scale=scale)) as bitmap:
                     self.image = ImageTk.PhotoImage(bitmap.to_pil(), master=self.page)
+                self.preview_key = key
         except Exception as error:
             self.show_error(error)
             return
+        x, y = self.canvas.xview()[0], self.canvas.yview()[0]
         self.canvas.delete("all")
-        self.canvas.create_image(12, 12, anchor="nw", image=self.image, tags=("report",))
+        self.canvas.create_image(PREVIEW_MARGIN, PREVIEW_MARGIN, anchor="nw", image=self.image, tags=("report",))
         self.position_preview()
-        self.canvas.xview_moveto(0)
-        self.canvas.yview_moveto(0)
+        self.canvas.xview_moveto(0 if reset_scroll else x)
+        self.canvas.yview_moveto(0 if reset_scroll else y)
 
     def position_preview(self, _=None):
         if self.image is not None:
-            width = max(self.canvas.winfo_width(), self.image.width() + 24)
+            width = max(self.canvas.winfo_width(), self.image.width() + 2 * PREVIEW_MARGIN)
             x = (width - self.image.width()) // 2
-            self.canvas.coords("report", x, 12)
-            self.canvas.configure(scrollregion=(0, 0, width, self.image.height() + 24))
+            self.canvas.coords("report", x, PREVIEW_MARGIN)
+            self.canvas.configure(scrollregion=(0, 0, width, self.image.height() + 2 * PREVIEW_MARGIN))
             self.canvas.delete("difference")
             differences = self.page_differences()
             if differences:
@@ -310,7 +368,8 @@ class ReportPage:
                 sy = self.image.height() / front.number("Height", 1123)
                 for diff in differences:
                     field = front.children[diff.position]
-                    left, top = x + field.number("Left") * sx, 12 + field.number("Top") * sy
+                    left = x + field.number("Left") * sx
+                    top = PREVIEW_MARGIN + field.number("Top") * sy
                     self.canvas.create_rectangle(left, top, left + field.number("Width", 1) * sx,
                                                  top + field.number("Height", 1) * sy,
                                                  outline="#b42318", width=2, tags="difference")

@@ -1,5 +1,6 @@
 import hmac
 import queue
+import sys
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -27,25 +28,51 @@ from .workbench import (
 )
 
 
-BACKGROUND = "#f3f5f8"
+BACKGROUND = "#edf2f7"
 WHITE = "#ffffff"
-FRAME = "#dfe4ea"
-TEXT = "#1f2937"
+FRAME = "#d7e1eb"
+TEXT = "#17283a"
 MUTED = "#6b7280"
-NAV = "#0f2a4a"
-BLUE = "#0b5cad"
+NAV = "#14283d"
+BLUE = "#075bab"
 SELECTED = "#d6e4f5"
 SUCCESS = "#067647"
 WARNING = "#b54708"
 ERROR = "#b42318"
 FONT = ("Microsoft JhengHei UI", 12)
 BOLD = (*FONT, "bold")
-TITLE = (FONT[0], 17, "bold")
+TITLE = (FONT[0], 20, "bold")
+
+
+def enable_windows_dpi():
+    """Enable native system-DPI rendering before Tk creates a Windows window."""
+    if sys.platform != "win32":
+        return
+    from ctypes import WinDLL, c_void_p, wintypes
+
+    try:
+        awareness = WinDLL("user32").SetProcessDpiAwarenessContext
+        awareness.argtypes = (c_void_p,)
+        awareness.restype = wintypes.BOOL
+        if awareness(c_void_p(-2)):  # DPI_AWARENESS_CONTEXT_SYSTEM_AWARE
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        WinDLL("user32").SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
+def scaled_pixels(widget, value):
+    return round(value * max(1, widget.winfo_fpixels("1i") / 96))
 
 
 def configure_styles(root):
     style = ttk.Style(root)
     style.theme_use("clam")
+    for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+        font.nametofont(name, root=root).configure(family=FONT[0], size=FONT[1])
     for widget in ("Text", "TEntry", "TCombobox", "TCombobox*Listbox"):
         root.option_add(f"*{widget}.font", FONT)
     style.configure(".", font=FONT, foreground=TEXT, background=BACKGROUND)
@@ -59,6 +86,7 @@ def configure_styles(root):
     style.configure("Nav.TFrame", background=NAV)
     style.configure("Accent.TFrame", background="#4ea1ff")
     style.configure("Brand.TLabel", background=NAV, foreground=WHITE, font=TITLE)
+    style.configure("NavHint.TLabel", background=NAV, foreground="#a8bacb")
     style.configure("Nav.TButton", background=NAV, foreground="#c7d2e0", anchor="w",
                     bordercolor=NAV, lightcolor=NAV, darkcolor=NAV, padding=(18, 10))
     style.map("Nav.TButton", background=[("active", "#17395e")])
@@ -74,11 +102,15 @@ def configure_styles(root):
               foreground=[("disabled", MUTED), ("!disabled", WHITE)])
     style.configure("TEntry", padding=6, fieldbackground=WHITE, bordercolor="#cfd6df")
     style.configure("TCombobox", padding=5, fieldbackground=WHITE, bordercolor="#cfd6df")
-    row_height = max(34, font.Font(root=root, font=FONT).metrics("linespace") + 12)
-    style.configure("Treeview", background=WHITE, fieldbackground=WHITE, bordercolor=FRAME, rowheight=row_height)
-    style.configure("Treeview.Heading", background="#f1f4f8", font=BOLD, padding=(8, 7),
+    row_height = font.Font(root=root, font=FONT).metrics("linespace") + scaled_pixels(root, 9)
+    style.configure("Treeview", font=FONT, background=WHITE, fieldbackground=WHITE, bordercolor=FRAME,
+                    rowheight=row_height)
+    style.configure("Treeview.Heading", background="#e7eff7", font=BOLD, padding=(8, 7),
                     bordercolor=FRAME, lightcolor="#f1f4f8", darkcolor="#f1f4f8")
     style.map("Treeview", background=[("selected", SELECTED)], foreground=[("selected", TEXT)])
+    style.configure("TNotebook", borderwidth=0)
+    style.configure("TNotebook.Tab", padding=(11, 7))
+    style.map("TNotebook.Tab", background=[("selected", WHITE)], foreground=[("selected", BLUE)])
 
 
 def make_table(parent, columns, selectmode="browse"):
@@ -89,7 +121,9 @@ def make_table(parent, columns, selectmode="browse"):
                         selectmode=selectmode, height=5)
     for key, heading, width, stretch in columns:
         tree.heading(key, text=heading, anchor="w")
-        tree.column(key, width=width, minwidth=width, stretch=stretch)
+        preferred = scaled_pixels(tree, width)
+        minimum = min(preferred, font.nametofont("TkHeadingFont", root=tree).measure(heading) + scaled_pixels(tree, 18))
+        tree.column(key, width=preferred, minwidth=minimum, stretch=stretch)
     yscroll = ttk.Scrollbar(panel, orient="vertical", command=tree.yview)
     xscroll = ttk.Scrollbar(panel, orient="horizontal", command=tree.xview)
     tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
@@ -150,11 +184,14 @@ class Workbench:
         root.columnconfigure(1, weight=1)
         root.rowconfigure(0, weight=1)
 
-        sidebar = ttk.Frame(root, style="Nav.TFrame", width=176)
+        sidebar = ttk.Frame(root, style="Nav.TFrame", width=scaled_pixels(root, 184))
         sidebar.grid(row=0, column=0, sticky="ns")
         sidebar.pack_propagate(False)
-        ttk.Label(sidebar, text="fuelcore", style="Brand.TLabel").pack(anchor="w", padx=21, pady=(26, 25))
-        body = ttk.Frame(root, padding=(24, 18))
+        ttk.Label(sidebar, text="fuelcore", style="Brand.TLabel").pack(anchor="w", padx=18, pady=(20, 1))
+        ttk.Label(sidebar, text="報單轉檔工作台", style="NavHint.TLabel").pack(anchor="w", padx=19, pady=(0, 18))
+        ttk.Label(sidebar, text=f"測試模式 · v{app_version()}", style="NavHint.TLabel").pack(
+            side="bottom", anchor="w", padx=18, pady=16)
+        body = ttk.Frame(root, padding=(scaled_pixels(root, 20), scaled_pixels(root, 16)))
         body.grid(row=0, column=1, sticky="nsew")
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
@@ -410,7 +447,9 @@ class Workbench:
         source.columnconfigure(0, weight=1)
         source.rowconfigure(4, weight=1)
         ttk.Label(source, text="TXT 來源目錄", style="CardTitle.TLabel").grid(sticky="w")
-        ttk.Label(source, textvariable=self.source_text, style="Hint.TLabel").grid(sticky="ew", pady=(2, 9))
+        source_path = ttk.Label(source, textvariable=self.source_text, style="Hint.TLabel", wraplength=520)
+        source_path.grid(sticky="ew", pady=(2, 9))
+        source.bind("<Configure>", lambda event: source_path.configure(wraplength=max(150, event.width - 30)))
         bar = ttk.Frame(source, style="Card.TFrame", borderwidth=0)
         bar.grid(sticky="ew", pady=(0, 9))
         self.start_button = ttk.Button(bar, text="開始轉檔", style="Primary.TButton", command=self.convert)
@@ -422,13 +461,13 @@ class Workbench:
         self.show_all_button = ttk.Checkbutton(bar, text="顯示全部", variable=self.show_all,
                                                command=self.refresh)
         self.show_all_button.pack(side="left", padx=(12, 0))
-        ttk.Label(bar, textvariable=self.summary, style="Hint.TLabel").pack(side="right", padx=8)
         check_bar = ttk.Frame(source, style="Card.TFrame", borderwidth=0)
         check_bar.grid(sticky="ew", pady=(0, 9))
         self.check_button = ttk.Button(check_bar, text="邏輯檢查", command=self.check_selected, state="disabled")
         self.check_button.pack(side="left")
         self.write_check_button = ttk.Checkbutton(check_bar, text="寫回結果", variable=self.write_check)
         self.write_check_button.pack(side="left", padx=(6, 0))
+        ttk.Label(check_bar, textvariable=self.summary, style="Hint.TLabel").pack(side="right", padx=8)
         panel, self.files = make_table(source, (
             ("name", "檔名", 240, True), ("folder", "日期資料夾", 116, False),
             ("sersno", "報單號碼", 165, False), ("status", "狀態", 103, False),
@@ -899,6 +938,7 @@ class Workbench:
 
 
 def run(config_path):
+    enable_windows_dpi()
     with runtime_logging(config_path):
         root = tk.Tk()
         Workbench(root, config_path)

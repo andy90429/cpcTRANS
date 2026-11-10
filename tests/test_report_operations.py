@@ -7,10 +7,18 @@ from unittest.mock import Mock, patch
 
 from fuelcore.report.comparison import comparable
 from fuelcore.report.retention import MARKER, daily_cleanup, mark_diagnostic, mark_outputs
-from fuelcore.report_view import ReportPage
+from fuelcore.report_view import MAX_PREVIEW_PIXELS, ReportPage, preview_scale
 
 
 class ReportOperationsTest(unittest.TestCase):
+    def test_preview_scale_uses_native_pixels_and_bounds_large_bitmaps(self):
+        paper = (600, 800)
+        self.assertAlmostEqual(preview_scale("符合寬度", (1824, 1000), paper, 96), 3.0)
+        self.assertAlmostEqual(preview_scale("整頁", (1824, 824), paper, 144), 1.0)
+        self.assertAlmostEqual(preview_scale("150%", (800, 600), paper, 144), 3.0)
+        scale = preview_scale("符合寬度", (12000, 4000), paper, 144)
+        self.assertLessEqual(scale * scale * paper[0] * paper[1], MAX_PREVIEW_PIXELS + 1)
+
     def test_daily_cleanup_prunes_only_old_date_markers(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
