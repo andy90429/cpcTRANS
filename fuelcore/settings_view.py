@@ -121,7 +121,7 @@ class SettingsPages:
             self.entry(page, row, label, "conversion", key, default)
         self.checkbox(page, 2, "寫回買方／船舶代碼表", "conversion", "write_codes")
         self.checkbox(page, 3, "轉完自動檢查（跟 CBS 按 F6 一樣）", "workflow", "check_after_convert")
-        self.checkbox(page, 4, "轉入成功後歸檔（P2-3 啟用後生效）", "workflow", "archive_after_convert")
+        self.checkbox(page, 4, "轉入成功後歸檔", "workflow", "archive_after_convert")
         ttk.Label(page, text="邏輯檢查外掛", style="Title.TLabel").grid(row=5, column=0, columnspan=2, sticky="w",
                                                                   pady=(8, 3))
         for row, label, key, default in (

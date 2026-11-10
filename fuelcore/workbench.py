@@ -3,7 +3,8 @@ import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from itertools import count
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -300,14 +301,61 @@ def prepare_database(settings):
         init_sqlite(settings)
 
 
-def convert_batch(paths, settings, notify):
+def move_without_overwriting(path, target):
+    if os.name == "nt":
+        path.rename(target)
+        return
+    # POSIX rename can replace an existing file. Creating a link fails if
+    # another writer already owns the destination name.
+    os.link(path, target)
+    try:
+        path.unlink()
+    except OSError:
+        target.unlink()
+        raise
+
+
+def archive_txt(path, source, *, now=None):
+    path = Path(path)
+    if source is None or path.suffix.lower() != ".txt":
+        return None
+    source = source.resolve()
+    if path.parent.resolve() != source or path.is_symlink():
+        return None
+    now = now or datetime.now()
+    folder = source / f"{now:%Y%m%d}"
+    folder.mkdir(exist_ok=True)
+    if folder.resolve() != folder:
+        raise OSError("歸檔日期目錄指向其他位置。")
+    for index in count():
+        name = path.name
+        if index:
+            counter = f"_{index}" if index > 1 else ""
+            name = f"{path.stem}.{now:%H%M%S_%f}{counter}{path.suffix}"
+        target = folder / name
+        try:
+            move_without_overwriting(path, target)
+        except FileExistsError:
+            continue
+        return target
+
+
+def convert_batch(paths, settings, notify, *, on_archive=None):
     prepare_database(settings)
     successful = []
     for path in paths:
         result = convert_file(path, settings)
-        notify(path, result)
         if result.ok:
             successful.append(result.sersno)
+            if settings.archive_after_convert:
+                try:
+                    target = archive_txt(path, settings.txt_source)
+                except (OSError, RuntimeError) as error:
+                    result.notes.append(f"歸檔失敗 {Path(path).name}：{error}")
+                else:
+                    if target is not None and on_archive is not None:
+                        on_archive(path, target)
+        notify(path, result)
     run = run_logic_check(successful, settings, save=True) if successful and settings.check_after_convert else None
     return successful, run
 

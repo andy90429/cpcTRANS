@@ -153,6 +153,8 @@ class Settings:
         self.logic_check = LogicCheckSettings.load(config, base)
         self.check_after_convert = config.getboolean("workflow", "check_after_convert", fallback=True)
         self.archive_after_convert = config.getboolean("workflow", "archive_after_convert", fallback=True)
+        txt_path = config.get("paths", "txt_path", fallback="").strip()
+        self.txt_source = Path(base) / txt_path if txt_path else None
         self.notify = NotifySettings.load(config, base)
         self.admin_password = config.get("app", "admin_password", fallback="")
 

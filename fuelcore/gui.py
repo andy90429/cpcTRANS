@@ -518,7 +518,7 @@ class Workbench:
                  if row in selected and file.status not in (IMPORTED, UNREADABLE)]
         if not paths:
             return
-        extra, failures = tuple(self.extra), self.failures.copy()
+        extra, failures = self.extra.copy(), self.failures.copy()
         show_all = self.show_all.get()
 
         def work():
@@ -531,13 +531,18 @@ class Workbench:
                     failures[path] = result.message or "轉檔失敗"
                 self.events.put(("conversion", (path, result)))
 
-            ids, run = convert_batch(paths, settings, notify)
+            def on_archive(path, target):
+                if path in extra:
+                    extra.remove(path)
+                    extra.add(target)
+
+            ids, run = convert_batch(paths, settings, notify, on_archive=on_archive)
             summaries, warning = check_summaries(ids, settings) if ids else ({}, "")
             scan = scan_inputs(self.config_path, extra, failures, show_all=show_all)
-            return scan, failures, ids, run, summaries, warning, settings.check_after_convert
+            return scan, extra, failures, ids, run, summaries, warning, settings.check_after_convert
 
         def finish(value):
-            scan, self.failures, ids, run, summaries, warning, auto = value
+            scan, self.extra, self.failures, ids, run, summaries, warning, auto = value
             if run is not None:
                 self.record_checks(run)
             self.show_files(scan)
