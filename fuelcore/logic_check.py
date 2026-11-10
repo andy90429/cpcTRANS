@@ -120,6 +120,17 @@ def parse_run(payload, ids, save, secret):
 
 
 def run_logic_check(sersnos, settings, save=False):
+    from .runtime import record
+
+    run = _run_logic_check(sersnos, settings, save)
+    for status in ("passed", "failed", "error"):
+        count = sum(result.status == status for result in run.results)
+        if count:
+            record("logic_check_save" if save else "logic_check", status, count=count)
+    return run
+
+
+def _run_logic_check(sersnos, settings, save):
     ids = tuple(dict.fromkeys(number.strip().upper() for number in sersnos))
     if not ids or any(not re.fullmatch(r"[A-Z0-9]{14}", number) for number in ids):
         return errors(ids, "請提供 14 碼英數報單號碼")

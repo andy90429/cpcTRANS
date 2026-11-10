@@ -13,6 +13,7 @@ from .logic_check import run_logic_check
 from .reply_view import ReplyPage
 from .report_view import ReportPage
 from .report.retention import daily_cleanup
+from .runtime import app_folder, app_version, eligible_recent, recent_path, record, runtime_logging, save_recent
 from .send_check import prepare, split_numbers
 from .settings import Settings, read_config
 from .settings_view import SettingsPages
@@ -130,7 +131,14 @@ class Workbench:
         self.log_detail = tk.StringVar()
 
         configure_styles(root)
-        root.title("fuelcore | 轉檔工作台")
+        root.title(f"fuelcore {app_version()} | 轉檔工作台")
+        icon = app_folder() / "fuelcore.ico"
+        if icon.is_file():
+            try:
+                root.iconbitmap(default=str(icon))
+            except tk.TclError:
+                pass
+        root.bind("<FocusIn>", self.raise_dialogs, add="+")
         root.configure(background=BACKGROUND)
         root.minsize(900, 640)
         if root.tk.call("tk", "windowingsystem") == "win32":
@@ -177,6 +185,7 @@ class Workbench:
         self.update_cbs_status()
         self.root.after(60, self.poll)
         self.root.after_idle(self.refresh)
+        self.root.after_idle(self.restore_recent)
         self.root.after(8000, self.cleanup_outputs)
         self.reply_page.restart_watch()
 
@@ -189,6 +198,18 @@ class Workbench:
             button.configure(style="Current.Nav.TButton" if key == name else "Nav.TButton")
         if name == "海關回覆":
             self.reply_page.activate()
+
+    def raise_dialogs(self, event):
+        if event.widget is not self.root:
+            return
+
+        def dialogs(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Toplevel) and child.winfo_viewable():
+                    child.lift()
+                dialogs(child)
+
+        dialogs(self.root)
 
     def unlock_settings(self):
         if self.settings_unlocked:
@@ -242,7 +263,10 @@ class Workbench:
         controls.grid(sticky="ew", pady=(0, 10))
         controls.columnconfigure(1, weight=1)
         ttk.Label(controls, text="報單號碼（空白或逗號分隔）").grid(row=0, column=0, sticky="w")
-        self.send_numbers = ttk.Entry(controls)
+        self.send_touched = False
+        self.send_input = tk.StringVar()
+        self.send_input.trace_add("write", self.touch_send_numbers)
+        self.send_numbers = ttk.Entry(controls, textvariable=self.send_input)
         self.send_numbers.grid(row=0, column=1, sticky="ew", padx=8)
         self.send_numbers.bind("<Return>", lambda _: self.check_before_send())
         self.send_check_button = ttk.Button(controls, text="檢查", command=self.check_before_send,
@@ -260,6 +284,26 @@ class Workbench:
         self.send_details = ScrolledText(page, height=6, wrap="word", state="disabled")
         self.send_details.grid(sticky="nsew", pady=(8, 0))
         ttk.Label(page, textvariable=self.task_status).grid(sticky="w", pady=(7, 0))
+
+    def touch_send_numbers(self, *_):
+        self.send_touched = True
+
+    def restore_recent(self):
+        if self.send_touched or not recent_path(self.config_path).is_file():
+            return
+        if self.busy:
+            self.root.after(200, self.restore_recent)
+            return
+
+        def work():
+            settings = Settings.load(config_source(self.config_path))
+            return eligible_recent(self.config_path, settings)
+
+        def finish(numbers):
+            if numbers and not self.send_touched:
+                self.send_input.set(" ".join(numbers))
+
+        self.run_task("正在讀取上次轉入的報單…", work, finish)
 
     def check_before_send(self):
         if self.busy:
@@ -564,6 +608,11 @@ class Workbench:
 
             ids, run = convert_batch(paths, settings, notify, on_archive=on_archive)
             summaries, warning = check_summaries(ids, settings) if ids else ({}, "")
+            try:
+                save_recent(self.config_path, ids)
+            except OSError:
+                record("save_recent", "failed")
+                warning = "\n".join(filter(None, (warning, "無法儲存上次轉入的報單號碼。")))
             scan = scan_inputs(self.config_path, extra, failures, show_all=show_all)
             return scan, extra, failures, ids, run, summaries, warning, settings.check_after_convert, new_ship
 
@@ -828,7 +877,8 @@ class Workbench:
 
 
 def run(config_path):
-    root = tk.Tk()
-    Workbench(root, config_path)
-    root.mainloop()
+    with runtime_logging(config_path):
+        root = tk.Tk()
+        Workbench(root, config_path)
+        root.mainloop()
     return 0

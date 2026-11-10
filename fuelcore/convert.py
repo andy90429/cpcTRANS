@@ -5,11 +5,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from time import perf_counter
 from typing import List
 
 from . import codes, rules
 from .db import Database
 from .schema import read_schema
+from .runtime import record
 
 
 MESSAGE = "5203S"
@@ -240,6 +242,7 @@ def transact(header, items, settings, notes, connection):
 
 
 def convert_file(path, settings, connection=None):
+    started = perf_counter()
     result = Result()
     try:
         header, items = read_txt(path, notes=result.notes)
@@ -251,6 +254,7 @@ def convert_file(path, settings, connection=None):
         result.message = str(error)
         if result.sersno:
             result.notes.append(f"{codes.F2_PREFIX}轉檔未完成，未確認代碼檔")
+    record("convert", "ok" if result.ok else "failed", filename=path, seconds=perf_counter() - started)
     return result
 
 

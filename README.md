@@ -257,6 +257,17 @@ python -m fuelcore print-report TEST00A10E0777 TEST00A10E0781 --config fuelcore.
 
 輸出清理在工作台開啟後背景執行，每天最多一次，依 `[cleanup]` 的 PDF、診斷、產生 Rpx 與更正申請書天數清除 `列印輸出` 和 `診斷` 內帶 fuelcore 所有權標記的檔案。設為 `0` 可停用該類清理。原檔備份與修改副本不列入清理。
 
+## 維運
+
+```powershell
+python -m fuelcore list --config fuelcore.ini
+python -m fuelcore convert --all --config fuelcore.ini
+```
+
+兩個命令都以 `[paths] txt_path` 為來源，包含較早的日期子目錄，並跳過測試庫已轉入的報單。成功的報單號碼存於設定檔旁的 `fuelcore_ui.json`。重開工作台時會重新確認這些報單，再填入「送出前確認」。
+
+設定檔旁的 `fuelcore_run.log` 記錄轉檔結果與耗時、邏輯檢查、送印及回覆監看錯誤，單檔 2 MB、保留兩份輪替。底層當機堆疊寫到 `fuelcore_crash.log`。工作台標題顯示版本，程式資料夾可放置 `fuelcore.ico` 作為視窗圖示。
+
 第三階段的試算、Table 13 和更正申請書以 10-21 版 `rpx_editor.html` 為依據。更正申請書以 B 欄顯示原報單數字、C 欄顯示修改數字。有更正時隱藏未變動的數字列，完全沒有更正時顯示全部。Excel 公式使用前後各自的匯率與單價，版面為 A4 直式一頁、水平及垂直置中。執行時無須提供 HTML 或另外準備 Excel 範本。報單直接列印沿用本機設定的印表機，先顯示報單、頁數和單／雙面模式供確認。
 
 ## 驗證與產生測試檔

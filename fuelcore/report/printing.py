@@ -1,6 +1,7 @@
 from pathlib import Path
 from dataclasses import dataclass
 
+from ..runtime import record
 from . import prepare_report
 from .rpx import RpxError
 
@@ -57,6 +58,16 @@ def print_report(settings, sersnos, *, yes=False, reports=None, cache=None, conn
 
 
 def print_batch(batch, plan, notify=print):
+    try:
+        result = send_batch(batch, plan, notify)
+    except Exception:
+        record("print_report", "failed")
+        raise
+    record("print_report", "submitted", count=len(batch.ids))
+    return result
+
+
+def send_batch(batch, plan, notify):
     try:
         from .drawing import draw_fields, prepare_pages
     except ImportError as error:

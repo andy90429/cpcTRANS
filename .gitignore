@@ -21,6 +21,10 @@ fuelcore_ships.json.*.tmp
 列印輸出/
 診斷/
 .fuelcore-cleanup/
+fuelcore_run.log*
+fuelcore_crash.log
+fuelcore_ui.json
+fuelcore_ui.json.*.tmp
 原檔備份/
 .fuelcore-agent/
 *.[rR][pP][tT]

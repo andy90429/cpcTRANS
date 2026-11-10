@@ -5,7 +5,7 @@ project = Path(SPECPATH)
 analysis = Analysis(
     [str(project / "fuelcore" / "__main__.py")],
     pathex=[str(project)],
-    datas=[(str(project / "fuelcore" / "schema.csv"), "fuelcore")],
+    datas=[(str(project / "fuelcore" / "schema.csv"), "fuelcore"), (str(project / "pyproject.toml"), ".")],
 )
 modules = PYZ(analysis.pure)
 utf8 = ("X utf8", None, "OPTION")

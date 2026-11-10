@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fuelcore import Settings, convert_files
 from fuelcore.codes import SHIP_BATCH_REMINDER, has_new_ship
+from fuelcore.runtime import record, runtime_logging, save_recent
 from fuelcore.schema import SCHEMA, init_sqlite, statements
 
 
@@ -20,8 +21,11 @@ def main():
     parser = argparse.ArgumentParser(prog=prog)
     commands = parser.add_subparsers(dest="command", required=True)
     convert = commands.add_parser("convert")
-    convert.add_argument("txt", nargs="+", type=Path)
+    convert.add_argument("txt", nargs="*", type=Path)
+    convert.add_argument("--all", action="store_true", help="轉入設定的 TXT 來源目錄中所有待轉檔")
     convert.add_argument("--config", "--db", required=True)
+    listing = commands.add_parser("list", help="列出設定的 TXT 來源目錄中所有待轉檔")
+    listing.add_argument("--config", default="fuelcore.ini")
     schema = commands.add_parser("schema", help="建立 SQLite 或輸出 MySQL 測試建表 SQL")
     schema.add_argument("--config", required=True)
     schema.add_argument("--csv", type=Path, default=SCHEMA)
@@ -71,6 +75,15 @@ def main():
     agent.add_argument("--mapping", type=Path)
     agent.add_argument("--shorts", type=Path)
     args = parser.parse_args()
+    if args.command == "convert" and (args.all == bool(args.txt)):
+        convert.error("請指定 TXT 檔案或 --all，兩者只能擇一")
+    if hasattr(args, "config"):
+        with runtime_logging(args.config):
+            return dispatch(args)
+    return dispatch(args)
+
+
+def dispatch(args):
     if args.command in ("rate-simulate", "rate-import"):
         from fuelcore.declare_rate import run_rate_command
         return run_rate_command(args)
@@ -93,6 +106,8 @@ def main():
         return run_check_command(args)
     if args.command == "send-check":
         return run_send_check_command(args)
+    if args.command == "list" or (args.command == "convert" and args.all):
+        return run_pending(args)
     settings = Settings.load(args.config)
     if args.command == "print-report":
         from fuelcore.report.printing import print_report
@@ -101,6 +116,7 @@ def main():
             if print_report(settings, args.sersno, yes=args.yes):
                 print("已送出列印工作。")
         except (RpxError, OSError) as error:
+            record("print_report_command", "failed")
             print(error, file=sys.stderr)
             return 1
         return 0
@@ -143,7 +159,34 @@ def main():
             else:
                 print(sql, end="")
         return 0
-    return run_conversion(args.txt, settings)
+    return run_conversion(args.txt, settings, config_path=Path(args.config).resolve())
+
+
+def run_pending(args):
+    from fuelcore.workbench import PENDING, prepare_database, scan_inputs
+
+    path = Path(args.config).resolve()
+    try:
+        settings = Settings.load(path)
+        folder, files, warnings = scan_inputs(path, show_all=True)
+        for warning in warnings:
+            print(warning, file=sys.stderr)
+        if folder is None:
+            print("請在 [paths] 設定有效的 txt_path。", file=sys.stderr)
+            return 1
+        if any(note.startswith("無法確認資料庫狀態") for note in warnings):
+            return 1
+        pending = [file for file in files if file.status == PENDING]
+        if args.command == "list":
+            for file in pending:
+                print(f"{file.sersno}\t{file.path}")
+            return 0
+        if pending:
+            prepare_database(settings)
+        return run_conversion([file.path for file in pending], settings, config_path=path)
+    except (OSError, KeyError, ValueError):
+        print("無法掃描 TXT 或讀取 fuelcore 測試庫設定。", file=sys.stderr)
+        return 1
 
 
 def run_send_check_command(args):
@@ -206,12 +249,18 @@ def run_check_command(args):
     return int(not run.results or any(not result.passed for result in run.results))
 
 
-def run_conversion(paths, settings):
+def run_conversion(paths, settings, *, config_path=None):
     results = convert_files(paths, settings)
     for result in results:
         print(json.dumps(asdict(result), ensure_ascii=False))
     if any(result.ok and has_new_ship(result.notes) for result in results):
         print(SHIP_BATCH_REMINDER, file=sys.stderr)
+    if config_path is not None:
+        try:
+            save_recent(config_path, [result.sersno for result in results if result.ok])
+        except OSError:
+            record("save_recent", "failed")
+            print("無法儲存上次轉入的報單號碼。", file=sys.stderr)
     failures = sum(not result.ok for result in results)
     print(f"成功 {len(results) - failures}，失敗 {failures}")
     return int(bool(failures))

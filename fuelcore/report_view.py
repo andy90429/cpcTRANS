@@ -17,13 +17,21 @@ from .report.printing import plan_print, print_batch
 from .report.retention import BATCH_NAME, MARKER, ordinary
 from .report.rpx import RpxError
 from .settings import Settings
+from .runtime import record
 from .workbench import config_source
 
 
 def windows_open(path, action="open"):
-    if not hasattr(os, "startfile"):
-        raise RpxError("此動作需要 Windows。")
-    os.startfile(str(path), action)
+    try:
+        if not hasattr(os, "startfile"):
+            raise RpxError("此動作需要 Windows。")
+        os.startfile(str(path), action)
+    except (OSError, RpxError):
+        if action == "print":
+            record("print_correction", "failed")
+        raise
+    if action == "print":
+        record("print_correction", "submitted")
 
 
 def saved_rpx(output):

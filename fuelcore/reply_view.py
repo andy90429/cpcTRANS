@@ -10,6 +10,7 @@ from .replies import NAMES, ReplyError, poll, today_replies
 from .report import prepare_report
 from .report.printing import plan_print, print_batch
 from .settings import Settings
+from .runtime import record
 from .workbench import config_source
 
 
@@ -118,6 +119,7 @@ class ReplyPage:
         self.logs.insert("", 0, values=(datetime.now().strftime("%H:%M:%S"), text))
 
     def failure(self, message):
+        record("reply_watch", "failed")
         self.status.set("更新失敗，請查看作業紀錄")
         self.log(message, note=True)
 
@@ -188,12 +190,15 @@ class ReplyPage:
             self.schedule()
             self.show_results(results)
             if warning:
+                record("reply_watch", "failed")
                 self.log(warning, note=True)
             if monitored:
                 for text in monitored.logs:
                     self.log(text)
                 for note in monitored.notes:
                     self.log(note, note=True)
+                if monitored.notes:
+                    record("reply_watch", "read_warning", count=len(monitored.notes))
                 if monitored.notifications:
                     self.show_notifications(monitored.notifications)
 
@@ -276,10 +281,13 @@ class ReplyPage:
                 try:
                     print_attachment(path, settings.notify.print_command)
                 except ReplyError as error:
+                    record("print_attachment", "failed")
                     logs.append(str(error))
                 except (OSError, ValueError, subprocess.SubprocessError):
+                    record("print_attachment", "failed")
                     logs.append(f"PDF 列印失敗：{path}")
                 else:
+                    record("print_attachment", "submitted")
                     logs.append(f"PDF 已送出列印：{path}")
             return logs
 
