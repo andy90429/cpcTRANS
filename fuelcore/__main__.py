@@ -34,6 +34,9 @@ def main():
             rate.add_argument("--output", type=Path, required=True)
         else:
             rate.add_argument("--yes", action="store_true", help="確認寫入測試庫")
+    cert = commands.add_parser("cert-check", help="在 Windows 本機檢查 PFX 憑證")
+    cert.add_argument("pfx")
+    cert.add_argument("--recorded-expiry", metavar="YYYY-MM-DD")
     check = commands.add_parser("check", help="用本機外掛執行 CBS 邏輯檢查")
     check.add_argument("sersno", nargs="+")
     check.add_argument("--config", default="fuelcore.ini")
@@ -67,6 +70,9 @@ def main():
     if args.command in ("rate-simulate", "rate-import"):
         from fuelcore.declare_rate import run_rate_command
         return run_rate_command(args)
+    if args.command == "cert-check":
+        from fuelcore.cert_check import run_cert_command
+        return run_cert_command(args)
     if args.command == "agent":
         return run_agent(args)
     if args.command == "list-printers":

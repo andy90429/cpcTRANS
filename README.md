@@ -85,6 +85,15 @@ python -m fuelcore rate-simulate --config fuelcore.ini --output .\匯率報告 -
 
 模擬只查詢資料庫。匯入會顯示變更，輸入 `y` 或指定 `--yes` 才寫入測試庫。歷史檔只用於核對最近九個已完成旬別。轉檔後，若測試庫已有同一期旬的買進匯率，程式會在報單匯率不符時加一行提醒。
 
+## Windows PFX 憑證檢查
+
+```powershell
+python -m fuelcore cert-check .\signing.pfx
+python -m fuelcore cert-check .\signing.pfx --recorded-expiry 2027-11-30
+```
+
+密碼由互動式終端機遮蔽輸入。檢查全程離線，PFX 在記憶體內開啟，密碼不會儲存。結果顯示檔名、選取的憑證主體、到期日與剩餘天數。已過期或無法開啟時退出碼為 1，正常與提醒為 0。
+
 ## CBS 邏輯檢查（F6）
 
 將本機外掛路徑填入 `fuelcore.ini` 的 `[logic_check] plugin_dir`，或設定 `FUELCORE_LOGIC_PLUGIN` 覆蓋。外掛的進入點為 `run_check.py`。直接用 Python 執行 fuelcore 時可將 `python_exe` 留空。封裝版請填本機 Python 執行檔路徑。逾時預設為 120 秒。
