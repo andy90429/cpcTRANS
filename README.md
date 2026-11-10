@@ -167,6 +167,28 @@ MySQL 匯入需先準備測試庫的回覆表、`RcvMsgRcds` 及只有一筆資�
 
 送信的兩份標準 XML 已在假報單 CSV 的 `SLNAME`、`SLADDR`、`SLCNAME`、`SLCADDR` 匿名化後重新產生。產生時用 `tests/test_edi.py` 的 `load_fixture_tables` 將假資料載入記憶體 SQLite，再用 `XmlSettings.load(Database(...))` 讀取本機 CBS 設定，最後將 `SendXmlBuilder.xml_bytes` 的結果直接寫入 `tests/fixtures/edi/expected/send/`。
 
+## 海關回覆工作台
+
+「海關回覆」以唯讀方式顯示 EDI 測試庫當天收到的回覆。按「重新整理」可更新清單，雙擊或在右鍵選單確認後可補印報單。補印需要 `[print] printer`、支援雙面的印表機及本機 CBS 報表資源。
+
+在 `fuelcore.ini` 的 `[notify]` 設定 `enabled = yes` 後啟動工作台，即會每隔 `poll_seconds` 秒監看 N5107 與 N5204。初次執行會建立設定檔旁的 `fuelcore.notify-state.json`，記住既有回覆的位置。C3 和 C1A18 的通知可分開開關。C2 只寫監看紀錄。
+
+```ini
+[notify]
+enabled = yes
+c3 = yes
+c1a18 = yes
+poll_seconds = 60
+c3_pdfs =
+    附件\{SERSNO}-{BAID}-*.pdf
+c1a18_pdfs =
+print_command =
+```
+
+附件相對路徑以設定檔所在資料夾為準，也接受絕對路徑。可用 `{SERSNO}`、`{BANAME}`、`{BAID}`、`{BYNAME}` 和萬用字元 `*`。通知按下「列印」後才會送出報單及找到的 PDF。附件預設交給 Windows 的 PDF 列印關聯。若指定 `print_command`，請在參數中放入 `{file}`，例如 `"C:\example\PdfViewer.exe" /print "{file}"`。
+
+N5109、NX5106、NX903、N5110 目前依規格欄名讀取，缺少的表或欄位會列入作業紀錄。
+
 ## 報單 Rpx 與 PDF 預覽
 
 從專案根目錄安裝列印所需套件。MySQL 環境可一併安裝 `.[mysql,report]`。

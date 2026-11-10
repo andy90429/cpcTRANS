@@ -8,6 +8,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from .edi import simulate_send
 from .logic_check import run_logic_check
+from .reply_view import ReplyPage
 from .report_view import ReportPage
 from .send_check import prepare, split_numbers
 from .settings import Settings
@@ -141,6 +142,7 @@ class Workbench:
         body.rowconfigure(0, weight=1)
         for name, build in (("轉檔", self.build_convert_page), ("報單列印", self.build_report_page),
                             ("送出前確認", self.build_send_page),
+                            ("海關回覆", self.build_reply_page),
                             ("設定", self.build_settings_page)):
             item = ttk.Frame(sidebar, style="Nav.TFrame")
             item.pack(fill="x", pady=2)
@@ -164,15 +166,21 @@ class Workbench:
         self.update_cbs_status()
         self.root.after(60, self.poll)
         self.root.after_idle(self.refresh)
+        self.reply_page.restart_watch()
 
     def show(self, name):
         self.pages[name].tkraise()
         for key, (indicator, button) in self.nav.items():
             indicator.configure(style="Accent.TFrame" if key == name else "Nav.TFrame")
             button.configure(style="Current.Nav.TButton" if key == name else "Nav.TButton")
+        if name == "海關回覆":
+            self.reply_page.activate()
 
     def build_report_page(self, page):
         self.report_page = ReportPage(self, page)
+
+    def build_reply_page(self, page):
+        self.reply_page = ReplyPage(self, page, make_table)
 
     def build_send_page(self, page):
         page.columnconfigure(0, weight=1)
@@ -650,6 +658,7 @@ class Workbench:
             self.checks.clear()
             self.conversions.clear()
             self.show_send_results(())
+            self.reply_page.restart_watch()
             self.show_feedback(f"已儲存 {self.config_path}")
             self.show_files(scan)
 
@@ -682,6 +691,7 @@ class Workbench:
         can_simulate = not self.busy and any(entry.can_send for entry in self.selected_send_rows())
         self.simulate_button.state(["!disabled" if can_simulate else "disabled"])
         self.send_check_button.state(["disabled" if self.busy else "!disabled"])
+        self.reply_page.refresh_button.state(["disabled" if self.busy else "!disabled"])
         for button in [self.add_button, self.refresh_button, self.show_all_button, *self.setting_actions]:
             button.state(["disabled" if self.busy else "!disabled"])
 

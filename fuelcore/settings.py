@@ -63,6 +63,34 @@ class LogicCheckSettings:
                    config.get(section, "rules_database", fallback="").strip())
 
 
+@dataclass(frozen=True)
+class NotifySettings:
+    base: Path
+    enabled: bool
+    c3: bool
+    c1a18: bool
+    poll_seconds: int
+    c3_pdfs: tuple
+    c1a18_pdfs: tuple
+    print_command: str
+
+    @classmethod
+    def load(cls, config, base):
+        section = "notify"
+        seconds = config.getint(section, "poll_seconds", fallback=60)
+        if seconds <= 0:
+            raise ValueError("[notify] poll_seconds 必須大於 0")
+
+        def paths(key):
+            return tuple(line.strip() for line in config.get(section, key, fallback="").splitlines() if line.strip())
+
+        return cls(Path(base), config.getboolean(section, "enabled", fallback=False),
+                   config.getboolean(section, "c3", fallback=True),
+                   config.getboolean(section, "c1a18", fallback=True),
+                   seconds, paths("c3_pdfs"), paths("c1a18_pdfs"),
+                   config.get(section, "print_command", fallback="").strip())
+
+
 class Settings:
     def __init__(self, config, base):
         db = config["database"]
@@ -97,6 +125,7 @@ class Settings:
         self.printer = config.get("print", "printer", fallback="").strip()
         self.logic_check = LogicCheckSettings.load(config, base)
         self.check_after_convert = config.getboolean("workflow", "check_after_convert", fallback=True)
+        self.notify = NotifySettings.load(config, base)
 
     @classmethod
     def load(cls, path):

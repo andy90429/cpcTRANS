@@ -16,6 +16,17 @@ printer =
 [workflow]
 check_after_convert = yes
 
+[notify]
+enabled = no
+c3 = yes
+c1a18 = yes
+poll_seconds = 60
+; Multiline PDF paths, relative to this INI or absolute. Use {SERSNO}, {BANAME}, {BAID}, {BYNAME}, or *.
+c3_pdfs =
+c1a18_pdfs =
+; Blank uses the Windows PDF print association. A custom command must contain {file}.
+print_command =
+
 [logic_check]
 ; FUELCORE_LOGIC_PLUGIN can override this example path.
 plugin_dir = C:\example\只放本機_邏輯檢查外掛

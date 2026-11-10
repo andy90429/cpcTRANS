@@ -7,6 +7,8 @@ dist/
 *.sqlite3
 *.sqlite
 *.db
+*.notify-state.json
+*.notify-state.json.*.tmp
 只放本機_CBS設定/
 參考程式_只放本機/
 只放本機_CBS報表/
