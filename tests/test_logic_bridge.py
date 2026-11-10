@@ -8,6 +8,7 @@ import sys
 import time
 from contextlib import closing
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -281,6 +282,10 @@ def test_local_plugin_never_passes_what_it_cannot_check(local_plugin):
         db.executescript(broken_rule.read_text(encoding="utf-8"))
     broken, = run_logic_check(numbers[:1], cfg, save=True).results
     assert broken.status == "failed" and broken.rules_unparsed == 1 and not broken.passed
+    # The message names the rule and its table, and leaves the rule's expression out.
+    unchecked, = broken.messages
+    assert unchecked.rule_id == "T1009" and "cusdec" in unchecked.text.casefold()
+    assert "[" not in unchecked.text
     assert declarations(cfg)[numbers[0]] == ("0", "0", 0)
     with closing(sqlite3.connect(cfg.path)) as db, db:
         db.execute("DROP TABLE tb_setifform")
@@ -291,22 +296,43 @@ def test_local_plugin_never_passes_what_it_cannot_check(local_plugin):
 def test_local_plugin_with_cbs_rules(tmp_path):
     if not os.getenv("FUELCORE_LOGIC_PLUGIN") or not os.getenv("FUELCORE_CBS_CONFIG"):
         pytest.skip("需要 FUELCORE_LOGIC_PLUGIN 與 FUELCORE_CBS_CONFIG")
+    plugin = Path(os.environ["FUELCORE_LOGIC_PLUGIN"])
+    local = [plugin / "test_rules" / name for name in ("cbs_empty_tables.sql", "realistic_values.sql")]
+    if not all(path.is_file() for path in local):
+        pytest.skip("本機外掛資料夾缺少 test_rules 的 CBS 測試輔助 SQL")
     cfg = Settings.load(EXAMPLE)
     cfg.path = tmp_path / "fuelcore_test.sqlite3"
+    cfg.logic_check = replace(cfg.logic_check, python_exe=os.getenv("FUELCORE_LOGIC_PYTHON", ""))
     init_sqlite(cfg)
     with closing(sqlite3.connect(cfg.path)) as db, db:
         import_cbs_tables(db, Path(os.environ["FUELCORE_CBS_CONFIG"]))
-    for index in range(1, 5):
-        path = transfer_tests.DatabaseTest.sample(SimpleNamespace(folder=tmp_path), f"{index:04d}")
+        # Tables the CBS rules query that the transfer core never writes.
+        db.executescript(local[0].read_text(encoding="utf-8"))
+        # The rules reject made-up codes, so take accepted ones from the local code tables.
+        office, box, officer, permit = db.execute(local[1].read_text(encoding="utf-8")).fetchone()
+    assert all((office, box, officer, permit)), "本機代碼表找不到可用的關別、箱號或許可證號"
+    cfg.cusboxno = box
+    for product in cfg.products.values():
+        product["permit"] = permit
+    # Office, declaration type, ROC year and box prefix follow the rules; "T" marks a test serial.
+    year = (date.today().year - 1911) % 100
+    changes = (("數量", "UPDATE invitem SET `數量` = '0.0000' WHERE SERSNO = ?"),
+               ("報單品名", "UPDATE invitem SET `報單品名` = '' WHERE SERSNO = ?"),
+               ("稅則編號", "UPDATE invitem SET `稅則編號` = substr(`稅則編號`, 1, 10) WHERE SERSNO = ?"),
+               ("FOREX", "UPDATE cusdec SET FOREX = '30.00000' WHERE SERSNO = ?"))
+    numbers = [f"{office}G5{year:02d}{box[:3]}T{index:04d}" for index in range(1, len(changes) + 2)]
+    for number in numbers:
+        path = transfer_tests.DatabaseTest.sample(SimpleNamespace(folder=tmp_path), number[-4:],
+                                                  h0=officer, h1=number)
         assert convert_file(path, cfg).ok
-    changes = (("數量", 0), ("報單品名", ""), ("DUTYAMT", 1))
     with closing(sqlite3.connect(cfg.path)) as db, db:
-        for number, (column, value) in zip(NUMBERS[1:4], changes):
-            db.execute(f"UPDATE invitem SET {identifier(column)} = ? WHERE SERSNO = ?", (value, number))
+        for number, (_, sql) in zip(numbers[1:], changes):
+            assert db.execute(sql, (number,)).rowcount
     baseline = cfg.path.read_bytes()
-    correct, *invalid = run_logic_check(NUMBERS[:4], cfg).results
-    assert correct.passed, correct
+    correct, *invalid = run_logic_check(numbers, cfg).results
+    assert correct.passed and correct.rules_total > 0, correct
     for result, (column, _) in zip(invalid, changes):
-        assert result.status == "failed"
-        assert any(message.field.casefold() == column.casefold() for message in result.messages), result
+        assert result.status == "failed" and result.rules_unparsed == 0, result
+        # A CBS rule and the plug-in's own item check may both report the same field.
+        assert {message.field.casefold() for message in result.messages} == {column.casefold()}, result
     assert cfg.path.read_bytes() == baseline

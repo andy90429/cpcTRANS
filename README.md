@@ -93,7 +93,7 @@ python -m fuelcore check TEST00A10E0777 --config fuelcore.ini --output 檢查結
 | --- | --- |
 | 都不設 | 只測 fuelcore 的接口，使用 `tests/fixtures/check_stub` 的假外掛 |
 | `FUELCORE_LOGIC_PLUGIN` | 另外用本機外掛檢查轉檔核心產生的 TEST 報單。規則是外掛資料夾 `test_rules` 裡自編的幾條，用來確認外掛能執行、能寫回，不代表 CBS 的實際規則。缺少這個資料夾時測試會跳過 |
-| 再加 `FUELCORE_CBS_CONFIG` | 另外匯入該資料夾的 `cbssetcontent.*.csv` 與 `code4.mydeclarerate.csv`，用 CBS 的規則檢查 |
+| 再加 `FUELCORE_CBS_CONFIG` | 另外匯入該資料夾的 `cbssetcontent.*.csv` 與 `code4.*.csv`，用 CBS 的規則檢查。CBS 的規則不接受 `TEST` 開頭的報單號碼與虛構的箱號、許可證號，所以這個測試會用外掛資料夾 `test_rules` 裡的 SQL 從本機代碼表取值，組出格式合理的測試號碼（流水號以 `T` 開頭），並補上規則會查詢而轉檔核心不寫入的空表 |
 
 要確認外掛能在封裝用的直譯器執行，可再將 `FUELCORE_LOGIC_PYTHON` 設為該 Python 執行檔（例如 Python 3.7 32 位元）。
 
