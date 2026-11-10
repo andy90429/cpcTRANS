@@ -104,7 +104,7 @@ class NotifySettings:
         def paths(key):
             return tuple(line.strip() for line in config.get(section, key, fallback="").splitlines() if line.strip())
 
-        return cls(Path(base), config.getboolean(section, "enabled", fallback=False),
+        return cls(Path(base), config.getboolean(section, "enabled", fallback=True),
                    config.getboolean(section, "c3", fallback=True),
                    config.getboolean(section, "c1a18", fallback=True),
                    seconds, paths("c3_pdfs"), paths("c1a18_pdfs"),

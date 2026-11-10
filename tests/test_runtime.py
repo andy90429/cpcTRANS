@@ -5,7 +5,9 @@ import tempfile
 import time
 import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fuelcore import Settings, convert_file
@@ -13,6 +15,7 @@ from fuelcore.__main__ import main
 from fuelcore.runtime import LOGGER, app_version, eligible_recent, record, runtime_logging, save_recent
 from fuelcore.schema import init_sqlite
 from fuelcore.settings import read_config
+from fuelcore.workbench import save_options
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +72,34 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(eligible_recent(self.config, self.settings), [numbers[4], numbers[0]])
         self.assertEqual(self.settings.path.read_bytes(), before)
         self.assertEqual(list(self.folder.glob("fuelcore_ui.json.*.tmp")), [])
+
+    def test_convert_all_uses_workflow_but_explicit_txt_only_converts(self):
+        sources = [self.source / f"D4122_TEST_{index:04d}.txt" for index in (1, 2, 3)]
+        for source in sources[:2]:
+            source.write_bytes((SAMPLES / source.name).read_bytes())
+        check = SimpleNamespace(results=[SimpleNamespace(sersno="TEST00A10E0002", label="✓ 通過")])
+        with patch("fuelcore.workbench.run_logic_check", return_value=check) as logic:
+            code, out, _ = self.cli("convert", str(sources[0]))
+            self.assertEqual(code, 0)
+            self.assertNotIn("邏輯檢查", out)
+            self.assertTrue(sources[0].exists())
+            logic.assert_not_called()
+            code, out, _ = self.cli("convert", "--all")
+            self.assertEqual(code, 0)
+            self.assertEqual([line for line in out.splitlines() if line.startswith("邏輯檢查")],
+                             ["邏輯檢查 TEST00A10E0002 ✓ 通過"])
+            self.assertFalse(sources[1].exists())
+            self.assertTrue((self.source / f"{date.today():%Y%m%d}" / sources[1].name).exists())
+            self.assertEqual(logic.call_args.args[0], ["TEST00A10E0002"])
+            self.assertEqual(logic.call_args.kwargs, {"save": True})
+            logic.reset_mock()
+            save_options(self.config, {"workflow": {"archive_after_convert": "no", "check_after_convert": "no"}})
+            sources[2].write_bytes((SAMPLES / sources[2].name).read_bytes())
+            code, out, _ = self.cli("convert", "--all")
+            self.assertEqual(code, 0)
+            self.assertNotIn("邏輯檢查", out)
+            self.assertTrue(sources[2].exists())
+            logic.assert_not_called()
 
     def test_logging_rotates_and_never_logs_conversion_error_contents(self):
         filename = SAMPLES / "D4122_TEST_0001.txt"

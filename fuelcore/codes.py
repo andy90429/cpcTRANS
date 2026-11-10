@@ -40,7 +40,10 @@ def ship_call(db, call, imo, name, notes, *, ships_path=None, raw_name=None):
             notes.append(warning)
         local_name = (raw_name if raw_name is not None else name).strip()
         for field, value, label in (("imo", imo.strip(), "IMO"), ("name", local_name, "船名")):
-            match = next((ship for ship in ships if getattr(ship, field).casefold() == value.casefold()), None)
+            if not value:
+                continue
+            match = next((ship for ship in ships if ship.call_sign
+                          and getattr(ship, field).casefold() == value.casefold()), None)
             if match is not None:
                 resolved = normalize_call(match.call_sign)
                 notes.append(f"自動填入呼號 {resolved}（依船舶資料 {label} {value}）")
@@ -57,7 +60,6 @@ def ship_call(db, call, imo, name, notes, *, ships_path=None, raw_name=None):
             resolved = matches.pop()
             notes.append(f"自動填入呼號 {resolved}（依船舶代碼表 {label} {value.strip()}）")
             return resolved
-    notes.append("請手動填呼號")
     return ""
 
 
@@ -99,7 +101,7 @@ def maintain_ship(db, raw_call, imo, name, write, notes, *, ships_path=None, raw
     try:
         call = ship_call(db, call, imo, name, notes, ships_path=ships_path, raw_name=raw_name)
     except Exception as error:
-        notes.append(f"查詢船舶代碼表失敗：{error}，請手動填呼號")
+        notes.append(f"查詢船舶代碼表失敗：{error}")
     if not call:
         notes.append(f"{F2_PREFIX}找不到呼號，請手動填呼號")
     elif len(call) > 10:

@@ -14,8 +14,8 @@ CORRUPT_WARNING = "船舶清單無法讀取，已使用空清單。"
 @dataclass(frozen=True)
 class Ship:
     name: str
-    imo: str
-    call_sign: str
+    imo: str = ""
+    call_sign: str = ""
     buyer_id: str = ""
     agent: str = ""
 
@@ -32,10 +32,8 @@ def validate_ship(ship):
     ship = Ship(**{key: value.strip() for key, value in values.items()})
     if not ship.name:
         raise ValueError("船名不可空白。")
-    if not valid_imo(ship.imo):
+    if ship.imo and not valid_imo(ship.imo):
         raise ValueError("IMO 須為 7 位數字，且檢查碼須正確。")
-    if not ship.call_sign:
-        raise ValueError("呼號不可空白。")
     if any("|" in value or (value and value.splitlines() != [value])
            for value in (ship.name, ship.call_sign, ship.buyer_id)):
         raise ValueError("船名、呼號及買方編號不可含 TXT 分隔符號或換行。")
@@ -49,11 +47,12 @@ def validate_ships(ships):
         name = ship.name.casefold()
         if name in names:
             raise ValueError(f"船名重複：{ship.name}")
-        if ship.imo in imos:
+        if ship.imo and ship.imo in imos:
             raise ValueError(f"IMO 重複：{ship.imo}")
         result.append(ship)
         names.add(name)
-        imos.add(ship.imo)
+        if ship.imo:
+            imos.add(ship.imo)
     return tuple(result)
 
 

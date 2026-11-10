@@ -31,7 +31,7 @@ enabled = yes
 fields = OTHER,EDIOTHER
 
 [notify]
-enabled = no
+enabled = yes
 c3 = yes
 c1a18 = yes
 poll_seconds = 60

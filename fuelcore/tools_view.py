@@ -70,14 +70,9 @@ class ToolsPage:
         if not (added or changed):
             messagebox.showinfo("每旬匯率", "本旬匯率皆相同，無須更新。", parent=window)
             return
-        # Keep the reply watcher from starting a background job inside the modal confirmation.
-        self.app.busy = True
-        try:
-            approved = messagebox.askyesno(
-                "確認更新每旬匯率", f"新增 {added}、更新 {changed}，要寫入測試庫嗎？", parent=window,
-            )
-        finally:
-            self.app.busy = False
+        approved = messagebox.askyesno(
+            "確認更新每旬匯率", f"新增 {added}、更新 {changed}，要寫入測試庫嗎？", parent=window,
+        )
         if approved:
             self.app.run_task("正在更新匯率並讀回核對…", lambda: save_rates(settings, plan),
                               self.show_rate_result, self.rate_error)

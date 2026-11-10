@@ -206,7 +206,8 @@ class DatabaseTest(unittest.TestCase):
                      ("ZZ2", "OTHER", "9292182"))
         self.convert(self.sample())
         result = self.convert(self.sample("0002", h20="UNKNOWN", h27=""))
-        self.assertIn("請手動填呼號", result.notes)
+        self.assertEqual([note for note in result.notes if "請手動填呼號" in note],
+                         ["呼號（F2）：找不到呼號，請手動填呼號"])
         self.assertEqual(self.query("SELECT BAID FROM cusdec WHERE SERSNO LIKE '%0002'")[0][0], "")
         result = self.convert(self.sample("0003", h27="ZZ123456789"))
         self.assertTrue(any("超過 10" in note for note in result.notes))

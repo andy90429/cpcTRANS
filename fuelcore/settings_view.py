@@ -228,7 +228,7 @@ class SettingsPages:
         left = ttk.Frame(page, padding=(0, 0, 10, 0))
         left.grid(row=0, column=0, sticky="nsew")
         for row, label, key, default in (
-            (0, "啟用回覆監看", "enabled", "no"), (1, "通知 C3", "c3", "yes"),
+            (0, "啟用回覆監看", "enabled", "yes"), (1, "通知 C3", "c3", "yes"),
             (2, "通知 C1A18", "c1a18", "yes"),
         ):
             self.checkbox(left, row, label, "notify", key, default)

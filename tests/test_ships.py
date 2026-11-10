@@ -76,6 +76,21 @@ class ShipTest(unittest.TestCase):
         self.assertEqual(ship_call(db, "TXT", ALPHA.imo, ALPHA.name, notes, ships_path=self.path), "TXT")
         db.select.assert_not_called()
 
+    def test_ship_name_only_and_blank_local_call_fall_through(self):
+        first, second = Ship("TEST NAME ONLY"), Ship("TEST NO CALL", ALPHA.imo)
+        change_ship(self.path, first)
+        change_ship(self.path, Ship("TEST OTHER NAME"))
+        change_ship(self.path, second)
+        self.assertEqual(load_ships(self.path)[0][0], first)
+        with self.assertRaisesRegex(ValueError, "檢查碼"):
+            change_ship(self.path, Ship("TEST INVALID IMO", "9292182"))
+        db = Mock()
+        db.table.return_value = "myshipname"
+        db.select.return_value = [("TESTDB",)]
+        notes = []
+        self.assertEqual(ship_call(db, "", ALPHA.imo, second.name, notes, ships_path=self.path), "TESTDB")
+        self.assertIn("船舶代碼表 IMO", notes[0])
+
     def test_corrupt_file_is_empty_and_conversion_falls_back_to_database(self):
         self.path.write_bytes(b'{"bad":')
         self.assertEqual(load_ships(self.path), ((), CORRUPT_WARNING))

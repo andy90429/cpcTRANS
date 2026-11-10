@@ -11,6 +11,17 @@ from fuelcore.report_view import ReportPage
 
 
 class ReportOperationsTest(unittest.TestCase):
+    def test_daily_cleanup_prunes_only_old_date_markers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            state = base / ".fuelcore-cleanup"
+            state.mkdir()
+            for name in ("20261102", "20261103", "keep.txt"):
+                (state / name).touch()
+            daily_cleanup(base, {"print": 0, "diag": 0, "generated": 0, "correction": 0},
+                          today=date(2026, 11, 10))
+            self.assertEqual({path.name for path in state.iterdir()}, {"20261103", "20261110", "keep.txt"})
+
     def test_numeric_date_and_nil_comparison(self):
         self.assertTrue(comparable("1,234.50", "1234.4999", "#,##0.00###")[0])
         self.assertFalse(comparable("1,234.49", "1234.4999", "#,##0.00###")[0])

@@ -108,6 +108,7 @@ class Workbench:
         self.config_path = config_path.resolve()
         self.events = queue.Queue()
         self.busy = False
+        self.cleanup_running = False
         self.extra = set()
         self.source_folder = None
         self.failures = {}
@@ -241,18 +242,24 @@ class Workbench:
         self.tools_page = ToolsPage(self, page)
 
     def cleanup_outputs(self):
-        if self.busy:
-            self.root.after(1000, self.cleanup_outputs)
+        if self.cleanup_running:
             return
+        self.cleanup_running = True
 
         def work():
             settings = Settings.load(config_source(self.config_path))
             return daily_cleanup(self.config_path.parent, settings.cleanup_days)
 
         def reschedule(_):
+            self.cleanup_running = False
             self.root.after(3600000, self.cleanup_outputs)
 
-        self.run_task("正在清理過期輸出…", work, reschedule, reschedule)
+        def failed(_):
+            record("cleanup", "failed")
+            self.reply_page.log("無法清理過期輸出。", note=True)
+            reschedule(None)
+
+        self.run_background(work, reschedule, failed)
 
     def build_send_page(self, page):
         page.columnconfigure(0, weight=1)
@@ -845,6 +852,17 @@ class Workbench:
 
         threading.Thread(target=worker).start()
 
+    def run_background(self, work, finish, on_error):
+        def worker():
+            try:
+                result = work()
+            except Exception as error:
+                self.events.put(("background", (on_error, str(error))))
+            else:
+                self.events.put(("background", (finish, result)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def poll(self):
         for _ in range(100):
             try:
@@ -853,6 +871,10 @@ class Workbench:
                 break
             if kind == "conversion":
                 self.show_result(value)
+                continue
+            if kind == "background":
+                callback, result = value
+                callback(result)
                 continue
             self.busy = False
             self.task_status.set("就緒")

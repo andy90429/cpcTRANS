@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import time
+from threading import Event
 import unittest
 from contextlib import closing
 from datetime import date, timedelta
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from fuelcore.replies import ReplyError, expand_pdf_paths, poll, today_replies
-from fuelcore.reply_view import print_attachment
+from fuelcore.reply_view import NO_EDI, print_attachment
 from fuelcore.settings import Settings, read_config
 from test_edi import CONFIG, REPORTS, load_fixture_tables
 
@@ -72,7 +73,7 @@ class RepliesTest(unittest.TestCase):
 
     def test_daily_other_messages_use_documented_fields_and_child_rows(self):
         for code, columns, values in (
-            ("N5109", "`派驗時間`,`查驗區`,`關員`", ("10:00", "TEST A", "TEST OFFICER")),
+            ("N5109", "`派驗日期時間`,`查驗區`,`驗貨關員`", ("2026-01-09 10:30:59", "X", "Y")),
             ("NX5106", "`回應代碼`,`備註`", ("TEST01", "TEST &lt;內容&gt; &amp; 原因")),
             ("NX903", "`原訊息類別`,`原訊息編號`", ("TEST03", "TEST0001")),
             ("N5110", "`稅費合計`,`繳款截止日`", ("100", "2026-11-30")),
@@ -85,7 +86,7 @@ class RepliesTest(unittest.TestCase):
         self.execute("INSERT INTO N5109 VALUES (2, '2000-01-01', '', '', '')")
         result = today_replies(self.settings)
         rows = {entry.code: entry.content for entry in result.replies}
-        self.assertEqual(rows["N5109"], "派驗時間 10:00；查驗區 TEST A；關員 TEST OFFICER")
+        self.assertEqual(rows["N5109"], "查驗；派驗 2026-01-09 10:30；查驗區 X；關員 Y")
         self.assertEqual(rows["NX5106"], "回應代碼 TEST01；備註 TEST <內容> & 原因")
         self.assertEqual(rows["NX903"], "原訊息類別 TEST03；原訊息編號 TEST0001；錯誤說明 TEST ERROR")
         self.assertEqual(rows["N5110"], "稅費合計 100；繳款截止日 2026-11-30")
@@ -113,18 +114,18 @@ class RepliesTest(unittest.TestCase):
         self.assertEqual([entry.kind for entry in result.notifications], ["C3", "C1A18"])
         self.assertEqual(result.logs, (
             f"{FIRST}：通關方式 C3M（應補辦 A01）", f"{SECOND}：通關方式 C1（應補辦 A18）",
-            f"{FIRST}：放行（C3M 改 C2）08:30:00",
+            f"{FIRST}：放行（C3M 改 C2） 08:30:00",
         ))
         self.assertTrue(result.notifications[0].missing)
         self.assertEqual(self.watch().logs, ())
 
-    def test_release_c1_uses_latest_requirement_and_old_rows_only_advance(self):
+    def test_release_c1_and_old_rows_do_not_notify(self):
         self.watch()
         self.notice(10000, FIRST, "C1", "A18", day=self.today - timedelta(days=1))
         self.release(22000, FIRST, "C1")
         result = self.watch()
-        self.assertEqual(result.logs, (f"{FIRST}：放行（C1）08:30:00",))
-        self.assertEqual([entry.kind for entry in result.notifications], ["C1A18"])
+        self.assertEqual(result.logs, (f"{FIRST}：放行（C1） 08:30:00",))
+        self.assertFalse(result.notifications)
         self.assertEqual(json.loads(self.state.read_text(encoding="utf-8"))["N5107"], 10000)
 
     def test_notification_switches_are_independent(self):
@@ -136,13 +137,26 @@ class RepliesTest(unittest.TestCase):
         self.notice(10001, SECOND, "C1", "A18")
         self.assertEqual([entry.kind for entry in self.watch().notifications], ["C1A18"])
 
+    def test_c3_release_logs_but_only_c3_notice_notifies(self):
+        self.watch()
+        self.notice(10000, FIRST, "C3", "A01")
+        self.notice(10001, SECOND, "C1", "XA18")
+        self.release(22000, FIRST, "C3")
+        result = self.watch()
+        self.assertEqual([entry.reply.sersno for entry in result.notifications], [FIRST])
+        self.assertEqual([line for line in result.logs if line.startswith(FIRST)], [
+            f"{FIRST}：通關方式 C3（應補辦 A01）", f"{FIRST}：放行（C3） 08:30:00",
+        ])
+        self.notice(10002, SECOND, "C1", " a18 ")
+        self.assertEqual([entry.kind for entry in self.watch().notifications], ["C1A18"])
+
     def test_missing_watch_table_keeps_its_existing_position(self):
         self.watch()
         self.execute("DROP TABLE n5107")
         self.release(22000, FIRST, "C3")
         result = self.watch()
         self.assertIn("測試庫缺少 N5107，已略過。", result.notes)
-        self.assertEqual(result.logs, (f"{FIRST}：放行（C3）08:30:00",))
+        self.assertEqual(result.logs, (f"{FIRST}：放行（C3） 08:30:00",))
         self.assertEqual(json.loads(self.state.read_text(encoding="utf-8")), {"N5107": 9847, "N5204": 22000})
 
     def test_corrupt_state_is_not_silently_replaced(self):
@@ -200,10 +214,12 @@ class RepliesTest(unittest.TestCase):
 
         def wait():
             deadline = time.monotonic() + 8
-            while app.busy and time.monotonic() < deadline:
+            while (app.busy or page.watch_running or app.cleanup_running) and time.monotonic() < deadline:
                 root.update()
                 time.sleep(0.01)
             self.assertFalse(app.busy)
+            self.assertFalse(page.watch_running)
+            self.assertFalse(app.cleanup_running)
 
         wait()
         self.assertIn("1 則回覆，放行 1 張", page.status.get())
@@ -229,6 +245,19 @@ class RepliesTest(unittest.TestCase):
         self.assertEqual(send.call_args.args, ("TEST BATCH", fake_plan))
         self.assertTrue(any("已送出雙面列印" in page.logs.set(row, "text") for row in page.logs.get_children()))
 
+        simplex = SimpleNamespace(duplex=False)
+        with patch("fuelcore.reply_view.messagebox.askyesno", side_effect=[False, True]) as ask, \
+                patch("fuelcore.reply_view.plan_print", return_value=simplex), \
+                patch("fuelcore.reply_view.prepare_report", return_value="TEST BATCH"), \
+                patch("fuelcore.reply_view.print_batch") as send:
+            page.start_print((FIRST,))
+            wait()
+            send.assert_not_called()
+            page.start_print((FIRST,))
+            wait()
+            send.assert_called_once()
+        self.assertIn("要單面列印嗎？", ask.call_args.args[1])
+
         self.watch()
         self.notice(10000, FIRST, "C3M", "A01")
         with patch.object(page, "start_print") as start_print:
@@ -247,9 +276,59 @@ class RepliesTest(unittest.TestCase):
             acknowledge.invoke()
 
         root.after_cancel(page.timer)
-        with patch("fuelcore.reply_view.today_replies", side_effect=ReplyError("無法開啟 EDI 測試庫。")), \
+        entered, release = Event(), Event()
+        foreground = []
+
+        def failing_read(_):
+            entered.set()
+            release.wait(5)
+            raise ReplyError("無法開啟 EDI 測試庫。")
+
+        conversion_log = app.logs.get_children()
+        reply_status = page.status.get()
+        with patch("fuelcore.reply_view.today_replies", side_effect=failing_read), \
                 patch("fuelcore.reply_view.messagebox.showerror") as show_error:
             page.watch()
+            self.assertTrue(entered.wait(2))
+            self.assertFalse(app.busy)
+            app.run_task("TEST FOREGROUND", lambda: "done", foreground.append)
+            try:
+                deadline = time.monotonic() + 3
+                while not foreground and time.monotonic() < deadline:
+                    root.update()
+                    time.sleep(0.01)
+                self.assertEqual(foreground, ["done"])
+                self.assertTrue(page.watch_running)
+                app.task_status.set("TEST KEEP")
+            finally:
+                release.set()
             wait()
             show_error.assert_not_called()
+        self.assertEqual(app.logs.get_children(), conversion_log)
+        self.assertEqual(app.task_status.get(), "TEST KEEP")
+        self.assertEqual(page.status.get(), reply_status)
         self.assertTrue(any("無法開啟 EDI 測試庫" in page.logs.set(row, "text") for row in page.logs.get_children()))
+
+        with patch("fuelcore.gui.daily_cleanup", side_effect=OSError("TEST CLEANUP")), \
+                patch("fuelcore.gui.record") as run_log:
+            app.cleanup_outputs()
+            self.assertFalse(app.busy)
+            wait()
+        run_log.assert_called_once_with("cleanup", "failed")
+        self.assertEqual(app.logs.get_children(), conversion_log)
+        self.assertEqual(app.task_status.get(), "TEST KEEP")
+        self.assertTrue(any("無法清理過期輸出" in page.logs.set(row, "text") for row in page.logs.get_children()))
+
+        config.remove_section("edi")
+        config.remove_section("notify")
+        with self.config.open("w", encoding="utf-8") as stream:
+            config.write(stream)
+        self.assertTrue(Settings.load(self.config).notify.enabled)
+        with patch("fuelcore.reply_view.today_replies") as read, patch("fuelcore.reply_view.messagebox.showerror") as error:
+            page.restart_watch()
+            self.assertIsNone(page.interval)
+            page.refresh()
+            wait()
+        read.assert_not_called()
+        error.assert_not_called()
+        self.assertEqual(sum(page.logs.set(row, "text") == NO_EDI for row in page.logs.get_children()), 1)

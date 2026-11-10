@@ -19,6 +19,8 @@ class ShipDialog(simpledialog.Dialog):
         parent.columnconfigure(1, weight=1)
         self.inputs = {}
         for row, (key, label) in enumerate(FIELDS):
+            if key != "name":
+                label += "（選填）"
             ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
             entry = ttk.Entry(parent, width=36)
             entry.insert(0, getattr(self.ship, key))

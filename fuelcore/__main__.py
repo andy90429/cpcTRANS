@@ -163,7 +163,7 @@ def dispatch(args):
 
 
 def run_pending(args):
-    from fuelcore.workbench import PENDING, prepare_database, scan_inputs
+    from fuelcore.workbench import PENDING, convert_batch, scan_inputs
 
     path = Path(args.config).resolve()
     try:
@@ -181,9 +181,12 @@ def run_pending(args):
             for file in pending:
                 print(f"{file.sersno}\t{file.path}")
             return 0
+        results = []
+        checks = None
         if pending:
-            prepare_database(settings)
-        return run_conversion([file.path for file in pending], settings, config_path=path)
+            _, checks = convert_batch([file.path for file in pending], settings,
+                                      lambda _, result: results.append(result))
+        return show_conversion_results(results, config_path=path, checks=checks)
     except (OSError, KeyError, ValueError):
         print("無法掃描 TXT 或讀取 fuelcore 測試庫設定。", file=sys.stderr)
         return 1
@@ -250,9 +253,15 @@ def run_check_command(args):
 
 
 def run_conversion(paths, settings, *, config_path=None):
-    results = convert_files(paths, settings)
+    return show_conversion_results(convert_files(paths, settings), config_path=config_path)
+
+
+def show_conversion_results(results, *, config_path=None, checks=None):
     for result in results:
         print(json.dumps(asdict(result), ensure_ascii=False))
+    if checks is not None:
+        for result in checks.results:
+            print(f"邏輯檢查 {result.sersno} {result.label}")
     if any(result.ok and has_new_ship(result.notes) for result in results):
         print(SHIP_BATCH_REMINDER, file=sys.stderr)
     if config_path is not None:

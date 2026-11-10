@@ -27,10 +27,10 @@ WATCHED = ("N5107", "N5204")
 RECEIVED = "接收日期時間"
 DATE_PREFIX = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(.*)$")
 EXTRA_FIELDS = {
-    "N5109": ("派驗時間", "查驗區", "關員"),
-    "NX5106": ("回應代碼", "備註"),
-    "NX903": ("原訊息類別", "原訊息編號"),
-    "N5110": ("稅費合計", "繳款截止日"),
+    "N5109": (("派驗日期時間", "派驗"), ("查驗區", "查驗區"), ("驗貨關員", "關員")),
+    "NX5106": (("回應代碼", "回應代碼"), ("備註", "備註")),
+    "NX903": (("原訊息類別", "原訊息類別"), ("原訊息編號", "原訊息編號")),
+    "N5110": (("稅費合計", "稅費合計"), ("繳款截止日", "繳款截止日")),
 }
 PDF_FIELD = re.compile(r"\{(SERSNO|BANAME|BAID|BYNAME)\}")
 
@@ -177,11 +177,16 @@ class ReplyStore:
             parts = [release_text(method), labelled("放行時間", release_time), labelled("放行件數", amount)]
         else:
             fields = EXTRA_FIELDS[code]
-            missing = [field for field in fields if field not in row]
+            missing = [field for field, _ in fields if field not in row]
             if missing:
                 self.notes[code] = f"{code} 缺少規格欄位 {'、'.join(missing)}，已略過缺漏欄位。"
-            parts = [labelled(field, row_text(row, field)) for field in fields]
-            if code == "NX5106":
+            parts = [labelled(label, row_text(row, field)) for field, label in fields]
+            if code == "N5109":
+                dispatched = received_at({RECEIVED: row_text(row, "派驗日期時間")})
+                if dispatched:
+                    parts[0] = f"派驗 {dispatched:%Y-%m-%d %H:%M}"
+                parts.insert(0, "查驗")
+            elif code == "NX5106":
                 parts[-1] = unescape(parts[-1])
             elif code == "NX903":
                 errors = self.details("NX903_1", "錯誤說明", main_id)
@@ -206,15 +211,12 @@ class ReplyStore:
                 replies.append(self.reply(code, row, received))
         return replies
 
-    def last_notice(self, sersno):
+    def last_notice_method(self, sersno):
         if not sersno:
-            return "", ()
-        rows = self.read("N5107", "MainID, `通關方式`",
+            return ""
+        rows = self.read("N5107", "`通關方式`",
                          f" WHERE `報單號碼` = ? ORDER BY {self.main_id} DESC LIMIT 1", (sersno,))
-        if not rows:
-            return "", ()
-        row = rows[0]
-        return row_text(row, "通關方式").strip(), self.details("N5107_11", "應補辦事項", row["MAINID"])
+        return row_text(rows[0], "通關方式").strip() if rows else ""
 
 
 def labelled(label, value):
@@ -272,7 +274,7 @@ def save_positions(path, positions):
 def notification_kind(method, requirements):
     if method.upper().startswith("C3"):
         return "C3"
-    if method.upper().startswith("C1") and any("A18" in value.upper() for value in requirements):
+    if method.upper().startswith("C1") and any(value.strip().upper() == "A18" for value in requirements):
         return "C1A18"
     return ""
 
@@ -323,16 +325,16 @@ def poll(settings, state_path):
                     updated[code] = highest
 
         for reply in sorted(new, key=lambda row: (row.received, row.code)):
-            previous, requirements = reply.method, reply.requirements
-            if reply.code == "N5107":
-                text = f"通關方式 {reply.method or '不明'}"
-                if requirements:
-                    text += f"（{requirement_text(requirements)}）"
-            else:
-                previous, requirements = store.last_notice(reply.sersno)
-                text = release_text(reply.method, previous) + reply.release_time
+            if reply.code == "N5204":
+                previous = store.last_notice_method(reply.sersno)
+                text = " ".join(filter(None, (release_text(reply.method, previous), reply.release_time)))
+                logs.append(f"{reply.sersno}：{text}")
+                continue
+            text = f"通關方式 {reply.method or '不明'}"
+            if reply.requirements:
+                text += f"（{requirement_text(reply.requirements)}）"
             logs.append(f"{reply.sersno}：{text}")
-            kind = notification_kind(reply.method, requirements)
+            kind = notification_kind(reply.method, reply.requirements)
             if settings.notify.enabled and reply.sersno and kind and getattr(settings.notify, kind.lower()):
                 fields = dict(SERSNO=reply.sersno, BANAME=reply.header_ship, BAID=reply.call_sign, BYNAME=reply.buyer)
                 patterns = settings.notify.c3_pdfs if kind == "C3" else settings.notify.c1a18_pdfs

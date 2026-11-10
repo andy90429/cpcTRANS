@@ -71,7 +71,7 @@ class SendCheckTest(unittest.TestCase):
         self.assertEqual(self.result().items[0].name, "TEST FALLBACK")
 
     def test_blank_zero_and_negative_quantities_block(self):
-        for quantity, blocked in [(None, True), ("  ", True), ("0", True), ("-1", True), ("2", False)]:
+        for quantity, blocked in [(None, True), ("  ", True), ("亂碼", True), ("0", True), ("-1", True), ("2", False)]:
             with self.subTest(quantity=quantity):
                 self.execute("UPDATE invitem SET `數量` = ?", (quantity,))
                 entry = self.result()
@@ -125,6 +125,8 @@ class SendCheckTest(unittest.TestCase):
 
     def test_buyer_code(self):
         self.assertFalse(self.result().warnings)
+        self.execute("UPDATE cusdec SET BYBAN = ' ttbr '")
+        self.assertFalse(self.result().warnings)
         self.execute("UPDATE cusdec SET BYBAN = 'TESTX'")
         self.assertEqual(len(self.result().warnings), 1)
         self.assertIn("BYBAN", self.result().warnings[0])
@@ -137,12 +139,17 @@ class SendCheckTest(unittest.TestCase):
     def test_ship_name_compares_case_and_spaces(self):
         self.execute("INSERT INTO myshipname (SN002, SN003) VALUES (?,?)", ("TEST001", " test   ship "))
         self.assertFalse(self.result().warnings)
-        self.execute("UPDATE myshipname SET SN003 = 'TEST OTHER'")
+        self.execute("INSERT INTO myshipname (SN002, SN003) VALUES (?,?)", ("TEST001", "TEST OLD"))
+        self.assertFalse(self.result().warnings)
+        self.execute("UPDATE cusdec SET BANAME = 'TEST OTHER'")
         self.assertEqual(self.result().warnings, ["船舶代碼表的船名與報單船名不同。"])
 
     def test_batch_duplicates_need_complete_matching_items_and_nearby_date(self):
         self.add_declaration(SECOND, day=self.today - timedelta(days=3), call="TEST002", quantity="2.0000")
         self.assertFalse(self.result().warnings)
+        batch = prepare([FIRST, SECOND], self.settings)
+        self.assertTrue(all(not entry.warnings for entry in batch))
+        self.execute("UPDATE cusdec SET BAID = ' test001 ' WHERE SERSNO = ?", (SECOND,))
         batch = prepare([FIRST, SECOND], self.settings)
         self.assertEqual(batch[0].warnings, [f"可能重複報單：{SECOND}。"])
         self.assertEqual(batch[1].warnings, [f"可能重複報單：{FIRST}。"])
@@ -152,6 +159,12 @@ class SendCheckTest(unittest.TestCase):
         self.execute("UPDATE cusdec SET SERSDATE = ? WHERE SERSNO = ?", (self.today.isoformat(), SECOND))
         self.execute("UPDATE invitem SET `報單品名` = ? WHERE SERSNO = ?", ("TEST OTHER", SECOND))
         self.assertFalse(prepare([FIRST, SECOND], self.settings)[0].warnings)
+
+    def test_blank_call_sign_skips_duplicate_search_even_in_batch(self):
+        self.add_declaration(SECOND, call="")
+        self.execute("UPDATE cusdec SET BAID = '' WHERE SERSNO = ?", (FIRST,))
+        batch = prepare([FIRST, SECOND], self.settings)
+        self.assertTrue(all(entry.warnings == ["呼號空白。"] for entry in batch))
 
     def test_historical_duplicates_only_check_latest_ten_for_call_sign(self):
         self.add_declaration(SECOND, day=self.today - timedelta(days=3))

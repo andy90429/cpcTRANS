@@ -6,12 +6,15 @@ from datetime import date, datetime, time, timedelta
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from .replies import NAMES, ReplyError, poll, today_replies
+from .replies import NAMES, ReplyError, ReplyList, poll, today_replies
 from .report import prepare_report
 from .report.printing import plan_print, print_batch
 from .settings import Settings
 from .runtime import record
 from .workbench import config_source
+
+
+NO_EDI = "未設定 [edi] 測試庫，海關回覆監看未啟動。"
 
 
 def command_arguments(command):
@@ -62,6 +65,8 @@ class ReplyPage:
         self.loaded = False
         self.timer = None
         self.interval = None
+        self.watch_running = False
+        self.watch_generation = 0
         self.state_path = app.config_path.with_suffix(".notify-state.json")
 
         page.columnconfigure(0, weight=1)
@@ -82,7 +87,7 @@ class ReplyPage:
         self.table.bind("<Double-1>", self.print_row)
         self.table.bind("<Button-3>", self.context_menu)
         self.menu = tk.Menu(page, tearoff=False)
-        self.menu.add_command(label="列印這張報單（雙面）…", command=self.confirm_print_row)
+        self.menu.add_command(label="列印這張報單…", command=self.confirm_print_row)
 
         ttk.Label(page, text="作業紀錄", style="Title.TLabel").grid(row=2, column=0, sticky="w", pady=(12, 6))
         logs, self.logs = make_table(page, (
@@ -143,20 +148,28 @@ class ReplyPage:
             self.log(note, note=True)
 
     def refresh(self):
-        self.app.run_task("正在讀取今日海關回覆…", lambda: today_replies(self.settings()),
+        def work():
+            settings = self.settings()
+            return today_replies(settings) if settings.edi else ReplyList((), (NO_EDI,))
+
+        self.app.run_task("正在讀取今日海關回覆…", work,
                           self.show_results, self.failure)
 
     def restart_watch(self):
+        self.watch_generation += 1
         if self.timer is not None:
             self.root.after_cancel(self.timer)
             self.timer = None
         self.interval = None
         try:
-            options = self.settings().notify
+            settings = self.settings()
         except (OSError, ValueError, KeyError):
-            options = None
-        if options and options.enabled:
-            self.interval = options.poll_seconds * 1000
+            settings = None
+        if settings and settings.notify.enabled:
+            if settings.edi:
+                self.interval = settings.notify.poll_seconds * 1000
+            else:
+                self.log(NO_EDI, note=True)
         self.schedule(1000 if self.interval else None)
 
     def schedule(self, delay=None):
@@ -172,12 +185,16 @@ class ReplyPage:
         if self.interval is None:
             self.schedule()
             return
-        if self.app.busy:
+        if self.watch_running:
             self.schedule(1000)
             return
+        self.watch_running = True
+        generation = self.watch_generation
 
         def work():
             settings = self.settings()
+            if not settings.edi or not settings.notify.enabled:
+                return None, None, ""
             results = today_replies(settings)
             try:
                 monitored = poll(settings, self.state_path)
@@ -186,7 +203,13 @@ class ReplyPage:
             return results, monitored, ""
 
         def finish(value):
+            self.watch_running = False
+            if generation != self.watch_generation:
+                return
             results, monitored, warning = value
+            if results is None:
+                self.restart_watch()
+                return
             self.schedule()
             self.show_results(results)
             if warning:
@@ -203,10 +226,14 @@ class ReplyPage:
                     self.show_notifications(monitored.notifications)
 
         def failed(message):
+            self.watch_running = False
+            if generation != self.watch_generation:
+                return
             self.schedule()
-            self.failure(message)
+            record("reply_watch", "failed")
+            self.log(message, note=True)
 
-        self.app.run_task("正在監看海關回覆…", work, finish, failed)
+        self.app.run_background(work, finish, failed)
 
     def row_at(self, event):
         if self.table.identify_region(event.x, event.y) != "cell":
@@ -234,7 +261,7 @@ class ReplyPage:
         if not reply.sersno:
             messagebox.showinfo("補印報單", "這筆回覆沒有報單號碼。", parent=self.page)
             return
-        if messagebox.askokcancel("補印報單", f"列印 {reply.sersno}（雙面）？", parent=self.page):
+        if messagebox.askokcancel("補印報單", f"列印 {reply.sersno}？", parent=self.page):
             self.start_print((reply.sersno,))
 
     def show_notifications(self, notifications):
@@ -261,13 +288,13 @@ class ReplyPage:
         if self.app.busy:
             return
 
-        def work():
+        def prepare():
             settings = self.settings()
             if not settings.printer:
-                raise ReplyError("請先設定 [print] printer，才能雙面列印報單。")
-            plan = plan_print(settings)
-            if not plan.duplex:
-                raise ReplyError("設定的報單印表機未回報支援雙面列印。")
+                raise ReplyError("請先設定 [print] printer，才能列印報單。")
+            return settings, plan_print(settings)
+
+        def work(settings, plan):
             logs = []
             for number in numbers:
                 try:
@@ -276,7 +303,8 @@ class ReplyPage:
                 except Exception as error:
                     logs.append(f"{number}：列印失敗（{error}）")
                 else:
-                    logs.append(f"{number}：已送出雙面列印。")
+                    mode = "雙面" if plan.duplex else "單面"
+                    logs.append(f"{number}：已送出{mode}列印。")
             for path in attachments:
                 try:
                     print_attachment(path, settings.notify.print_command)
@@ -301,4 +329,11 @@ class ReplyPage:
             self.log(message)
             messagebox.showerror("列印報單", message, parent=self.page)
 
-        self.app.run_task("正在列印海關回覆報單…", work, finish, failed)
+        def ready(prepared):
+            settings, plan = prepared
+            if not plan.duplex and not messagebox.askyesno(
+                    "確認單面列印", "這台印表機未回報支援雙面，要單面列印嗎？", parent=window or self.page):
+                return
+            self.app.run_task("正在列印海關回覆報單…", lambda: work(settings, plan), finish, failed)
+
+        self.app.run_task("正在讀取印表機設定…", prepare, ready, failed)

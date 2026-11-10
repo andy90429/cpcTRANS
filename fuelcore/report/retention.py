@@ -2,7 +2,7 @@ import json
 import re
 import stat
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -121,12 +121,20 @@ def daily_cleanup(base, days, *, today=None):
     state.mkdir(exist_ok=True)
     if not ordinary(state, stat.S_ISDIR):
         return []
-    day = (today or date.today()).strftime("%Y%m%d")
+    today = today or date.today()
+    day = today.strftime("%Y%m%d")
     try:
         with (state / day).open("x"):
             pass
     except FileExistsError:
         return []
+    cutoff = (today - timedelta(days=7)).strftime("%Y%m%d")
+    for marker in state.iterdir():
+        try:
+            if re.fullmatch(r"[0-9]{8}", marker.name) and marker.name < cutoff and ordinary(marker, stat.S_ISREG):
+                marker.unlink()
+        except OSError:
+            continue
     removed = []
     for root in (base / "列印輸出", base / "診斷"):
         if root.exists() and ordinary(root, stat.S_ISDIR):

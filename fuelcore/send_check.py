@@ -105,11 +105,10 @@ def mismatch(actual, expected, tolerance=None):
     return abs(actual - expected) > tolerance
 
 
-def check_items(declaration, header, rows):
-    for item, row in zip(declaration.items, map(upper_keys, rows)):
+def check_items(declaration, header):
+    for item in declaration.items:
         label = f"第 {item.number} 項"
-        blank = "數量" in row and not row_text(row, "數量").strip()
-        if blank or (item.quantity is not None and item.quantity <= 0):
+        if item.quantity is None or item.quantity <= 0:
             declaration.blocks.append(f"{label}數量空白或不大於 0。")
         if item.quantity is None:
             continue
@@ -141,7 +140,7 @@ def check_reference_data(db, declaration, header, history_table):
             declaration.warnings.append(f"以前送過 {history['total']} 次（最後一次 {latest}）。")
 
     buyer = declaration.buyer.strip()
-    if buyer and "BYBAN" in header and row_text(header, "BYBAN").strip() != buyer_code(buyer):
+    if buyer and "BYBAN" in header and row_text(header, "BYBAN").strip().upper() != buyer_code(buyer).strip().upper():
         declaration.warnings.append("買方代號 BYBAN 與買方名稱推導的代號不同。")
     call_sign = declaration.call_sign
     if not call_sign:
@@ -151,7 +150,7 @@ def check_reference_data(db, declaration, header, history_table):
         table = db.table("myshipname")
         rows = optional_rows(db, f"SELECT SN003 FROM {table} WHERE UPPER(TRIM(SN002)) = ?", (call_sign.upper(),))
         names = {normalized_name(row_text(upper_keys(row), "SN003")) for row in rows or ()} - {""}
-        if names - {normalized_name(declaration.ship_name)}:
+        if names and normalized_name(declaration.ship_name) not in names:
             declaration.warnings.append("船舶代碼表的船名與報單船名不同。")
 
 
@@ -163,28 +162,29 @@ def item_signature(items):
 
 def check_duplicates(db, declarations, dates):
     signatures = {entry.sersno: item_signature(entry.items) for entry in declarations}
+    calls = {entry.sersno: entry.call_sign.strip().upper() for entry in declarations}
     for entry in declarations:
         day, signature = dates.get(entry.sersno), signatures[entry.sersno]
-        if day is None or not signature:
+        call = calls[entry.sersno]
+        if day is None or not signature or not call:
             continue
         matches = {
             other for other, other_day in dates.items()
             if other != entry.sersno and other_day is not None and abs((day - other_day).days) <= 3
-            and signatures[other] == signature
+            and calls[other] == call and signatures[other] == signature
         }
-        if entry.call_sign:
-            table = db.table("cusdec")
-            recent = optional_rows(
-                db, f"SELECT SERSNO, SERSDATE FROM {table} WHERE MSGCODE = ? AND UPPER(TRIM(BAID)) = ? "
-                "AND SERSNO <> ? ORDER BY SERSDATE DESC, SERSNO DESC LIMIT 10",
-                (MESSAGE, entry.call_sign.upper(), entry.sersno),
-            )
-            for row in map(upper_keys, recent or ()):
-                other, other_day = row_text(row, "SERSNO"), declaration_date(row)
-                if other in signatures or other_day is None or abs((day - other_day).days) > 3:
-                    continue
-                if item_signature(read_items(item_rows(db, other) or ())) == signature:
-                    matches.add(other)
+        table = db.table("cusdec")
+        recent = optional_rows(
+            db, f"SELECT SERSNO, SERSDATE FROM {table} WHERE MSGCODE = ? AND UPPER(TRIM(BAID)) = ? "
+            "AND SERSNO <> ? ORDER BY SERSDATE DESC, SERSNO DESC LIMIT 10",
+            (MESSAGE, call, entry.sersno),
+        )
+        for row in map(upper_keys, recent or ()):
+            other, other_day = row_text(row, "SERSNO"), declaration_date(row)
+            if other in signatures or other_day is None or abs((day - other_day).days) > 3:
+                continue
+            if item_signature(read_items(item_rows(db, other) or ())) == signature:
+                matches.add(other)
         if matches:
             entry.warnings.append("可能重複報單：" + "、".join(sorted(matches)) + "。")
 
@@ -237,7 +237,7 @@ def prepare(sersnos, settings) -> List[Declaration]:
             entry.items = read_items(rows or ())
             if not entry.items:
                 entry.errors.append("無法讀取報單項次。" if rows is None else "報單沒有項次。")
-            check_items(entry, header, rows or ())
+            check_items(entry, header)
             check_reference_data(db, entry, header, history_table)
         check_duplicates(db, declarations, dates)
     return declarations
