@@ -87,6 +87,18 @@ python -m fuelcore check TEST00A10E0777 --config fuelcore.ini --output 檢查結
 
 工作台選取已轉入的報單後，可按「邏輯檢查」做唯讀檢查，再雙擊報單查看訊息。送信模擬依報單現有的 `STATUS=Y` 判斷，尚未通過時會提示執行 `check --save`。
 
+測試分三層：
+
+| 設定 | 會執行的測試 |
+| --- | --- |
+| 都不設 | 只測 fuelcore 的接口，使用 `tests/fixtures/check_stub` 的假外掛 |
+| `FUELCORE_LOGIC_PLUGIN` | 另外用本機外掛檢查轉檔核心產生的 TEST 報單。規則是外掛資料夾 `test_rules` 裡自編的幾條，用來確認外掛能執行、能寫回，不代表 CBS 的實際規則。缺少這個資料夾時測試會跳過 |
+| 再加 `FUELCORE_CBS_CONFIG` | 另外匯入該資料夾的 `cbssetcontent.*.csv` 與 `code4.mydeclarerate.csv`，用 CBS 的規則檢查 |
+
+要確認外掛能在封裝用的直譯器執行，可再將 `FUELCORE_LOGIC_PYTHON` 設為該 Python 執行檔（例如 Python 3.7 32 位元）。
+
+SQLite 測試庫的小數與日期欄位宣告為 `TEXT DECIMAL(…)`、`TEXT DATETIME` 等型別，值仍以原樣文字儲存。舊版建立的 SQLite 測試庫沒有這些宣告，數值規則會無法檢查，請刪除後用 `schema` 命令重建。
+
 外掛結構和需要的 CBS 規則資料見 [邏輯檢查調查](docs/邏輯檢查_調查.md)。
 
 ## 送信模擬

@@ -203,16 +203,19 @@ def correction_bytes(trial, after, number, release):
     raw.seek(0)
     output = BytesIO()
     # Keep the filed/current display values alongside the recalculable Excel formulas.
-    formula_cell = re.compile(rb'(<c r="([A-Z]+\d+)"[^>]*><f>[^<]*</f><v>)(</v>)')
+    # openpyxl writes the empty value as <v></v> with lxml installed and as <v /> without it.
+    formula_cell = re.compile(rb'(<c r="([A-Z]+\d+)"[^>]*><f>[^<]*</f>)<v\s*(?:/>|></v>)')
     with ZipFile(raw) as source, ZipFile(output, "w") as target:
         for entry in source.infolist():
             data = source.read(entry)
             if entry.filename == "xl/worksheets/sheet1.xml":
                 def cache(match):
                     value = cached_values[match[2].decode()]
-                    return match[1] + format(value, "f").encode() + match[3]
+                    return match[1] + b"<v>" + format(value, "f").encode() + b"</v>"
 
-                data = formula_cell.sub(cache, data)
+                data, replaced = formula_cell.subn(cache, data)
+                if replaced != len(cached_values):
+                    raise ValueError("更正申請書的公式儲存格無法寫入顯示值")
             target.writestr(entry, data)
     return output.getvalue()
 

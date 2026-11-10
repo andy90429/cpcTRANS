@@ -194,6 +194,100 @@ def import_cbs_tables(db, folder):
             db.executemany(f"INSERT INTO {table} VALUES ({markers})", rows)
 
 
+# The rule tables use the CBS layout, so the made-up test rules live beside the plug-in, outside Git.
+SAMPLE_RULES = Path("test_rules") / "sample_rules.sql"
+BROKEN_RULE = Path("test_rules") / "broken_rule.sql"
+SAMPLE_DEFECTS = (
+    ("數量", "UPDATE invitem SET `數量` = '0.0000' WHERE SERSNO = ?"),
+    ("報單品名", "UPDATE invitem SET `報單品名` = '' WHERE SERSNO = ?"),
+    ("MARKS", "UPDATE cusdec SET MARKS = '' WHERE SERSNO = ?"),
+    ("FOREX", "UPDATE cusdec SET FOREX = '30.00000' WHERE SERSNO = ?"),
+)
+
+
+@pytest.fixture
+def local_plugin(tmp_path):
+    """The real plug-in, a database from the transfer core, and made-up rules."""
+    folder = os.getenv("FUELCORE_LOGIC_PLUGIN")
+    if not folder:
+        pytest.skip("需要 FUELCORE_LOGIC_PLUGIN 指向本機邏輯檢查外掛")
+    folder = Path(folder)
+    assert (folder / "run_check.py").is_file(), "FUELCORE_LOGIC_PLUGIN 裡找不到 run_check.py"
+    if not (folder / SAMPLE_RULES).is_file() or not (folder / BROKEN_RULE).is_file():
+        pytest.skip("本機外掛資料夾缺少 test_rules 的自編測試規則")
+    cfg = Settings.load(EXAMPLE)
+    cfg.path = tmp_path / "fuelcore_test.sqlite3"
+    # Optional: run the plug-in with the interpreter used for packaging, for example Python 3.7 32-bit.
+    cfg.logic_check = replace(cfg.logic_check, python_exe=os.getenv("FUELCORE_LOGIC_PYTHON", ""))
+    init_sqlite(cfg)
+    numbers = NUMBERS[:len(SAMPLE_DEFECTS) + 1]
+    for number in numbers:
+        path = transfer_tests.DatabaseTest.sample(SimpleNamespace(folder=tmp_path), number[-4:])
+        assert convert_file(path, cfg).ok
+    with closing(sqlite3.connect(cfg.path)) as db, db:
+        db.executescript((folder / SAMPLE_RULES).read_text(encoding="utf-8"))
+        for number, (_, sql) in zip(numbers[1:], SAMPLE_DEFECTS):
+            assert db.execute(sql, (number,)).rowcount
+    return cfg, numbers
+
+
+def declarations(cfg):
+    with closing(sqlite3.connect(cfg.path)) as db:
+        return {number: tuple(rest) for number, *rest in db.execute(
+            "SELECT SERSNO, STATUS, `原狀態`, `是否已邏輯` FROM cusdec")}
+
+
+def test_local_plugin_reads_transfer_output_without_writing(local_plugin):
+    cfg, numbers = local_plugin
+    baseline = cfg.path.read_bytes()
+    correct, *invalid = run_logic_check(numbers, cfg).results
+    assert correct.passed and correct.basic_passed and correct.item_passed, correct
+    assert correct.rules_total > 0 and not correct.messages and not correct.saved
+    for result, (field, _) in zip(invalid, SAMPLE_DEFECTS):
+        assert result.status == "failed" and result.rules_unparsed == 0, result
+        assert [message.field for message in result.messages] == [field], result
+    assert invalid[0].basic_passed and not invalid[0].item_passed
+    assert not invalid[1].basic_passed and invalid[1].item_passed
+    assert [message.item for message in invalid[0].messages + invalid[1].messages] == [1, 1]
+    assert cfg.path.read_bytes() == baseline
+
+
+def test_local_plugin_save_writes_status_and_error_list(local_plugin):
+    cfg, numbers = local_plugin
+    results = run_logic_check(numbers, cfg, save=True).results
+    assert all(result.saved for result in results)
+    states = declarations(cfg)
+    assert states[numbers[0]] == ("Y", "0", 1)
+    assert all(states[number] == ("0", "0", 0) for number in numbers[1:])
+    with closing(sqlite3.connect(cfg.path)) as db:
+        saved = sorted(db.execute("SELECT SERSNO, PFIELD, PLOGICTYPE FROM tb_errormsg"))
+    assert saved == sorted([(numbers[1], "數量", 2), (numbers[2], "報單品名", 1),
+                            (numbers[3], "MARKS", 1), (numbers[4], "FOREX", 1)])
+    # A corrected declaration passes on the next run, and its old errors are removed.
+    with closing(sqlite3.connect(cfg.path)) as db, db:
+        db.execute("UPDATE cusdec SET MARKS = 'N/M' WHERE SERSNO = ?", (numbers[3],))
+    assert run_logic_check([numbers[3]], cfg, save=True).results[0].passed
+    assert declarations(cfg)[numbers[3]] == ("Y", "0", 1)
+    with closing(sqlite3.connect(cfg.path)) as db:
+        assert not db.execute("SELECT 1 FROM tb_errormsg WHERE SERSNO = ?", (numbers[3],)).fetchall()
+
+
+def test_local_plugin_never_passes_what_it_cannot_check(local_plugin):
+    cfg, numbers = local_plugin
+    missing, = run_logic_check(["TEST00A10E9999"], cfg, save=True).results
+    assert missing.status == "error" and not missing.saved
+    broken_rule = Path(os.environ["FUELCORE_LOGIC_PLUGIN"]) / BROKEN_RULE
+    with closing(sqlite3.connect(cfg.path)) as db, db:
+        db.executescript(broken_rule.read_text(encoding="utf-8"))
+    broken, = run_logic_check(numbers[:1], cfg, save=True).results
+    assert broken.status == "failed" and broken.rules_unparsed == 1 and not broken.passed
+    assert declarations(cfg)[numbers[0]] == ("0", "0", 0)
+    with closing(sqlite3.connect(cfg.path)) as db, db:
+        db.execute("DROP TABLE tb_setifform")
+    unusable, = run_logic_check(numbers[:1], cfg).results
+    assert unusable.status == "error" and not unusable.passed
+
+
 def test_local_plugin_with_cbs_rules(tmp_path):
     if not os.getenv("FUELCORE_LOGIC_PLUGIN") or not os.getenv("FUELCORE_CBS_CONFIG"):
         pytest.skip("需要 FUELCORE_LOGIC_PLUGIN 與 FUELCORE_CBS_CONFIG")

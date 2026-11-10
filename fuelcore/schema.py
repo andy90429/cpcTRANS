@@ -32,6 +32,17 @@ def read_schema(path=SCHEMA):
     return dict(tables)
 
 
+def sqlite_type(kind):
+    if kind.startswith(("int(", "bigint(")):
+        return "INTEGER"
+    if kind.startswith(("decimal(", "double(", "datetime")):
+        # The leading TEXT keeps SQLite's text affinity, so stored values stay exactly as written
+        # (33.5000 is not turned into 33.5). The rest records the CBS type for tools that read the
+        # declared type, such as the local logic checker.
+        return "TEXT " + kind.upper()
+    return "TEXT"
+
+
 def statements(settings, path=SCHEMA):
     mysql = settings.driver == "mysql"
     if mysql:
@@ -45,7 +56,7 @@ def statements(settings, path=SCHEMA):
             kind = row["COLUMN_TYPE"]
             identity = row["EXTRA"] == "auto_increment"
             if not mysql:
-                kind = "INTEGER" if kind.startswith(("int(", "bigint(")) else "TEXT"
+                kind = sqlite_type(kind)
             definition = identifier(column) + " " + kind
             if row["IS_NULLABLE"] == "NO":
                 definition += " NOT NULL"

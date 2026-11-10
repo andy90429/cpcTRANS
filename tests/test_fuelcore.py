@@ -131,6 +131,17 @@ class DatabaseTest(unittest.TestCase):
         with closing(sqlite3.connect(str(self.settings.path))) as db, db:
             db.execute(sql, params)
 
+    def test_sqlite_declares_cbs_types_without_changing_stored_text(self):
+        declared = {row["name"]: row["type"] for row in self.query("PRAGMA table_info(invitem)")}
+        self.assertEqual(declared["數量"], "TEXT DOUBLE(15,4)")
+        self.assertEqual(declared["報單淨重"], "TEXT DECIMAL(16,6)")
+        self.assertEqual(declared["項次號碼"], "INTEGER")
+        header = {row["name"]: row["type"] for row in self.query("PRAGMA table_info(cusdec)")}
+        self.assertEqual(header["SERSDATE"], "TEXT DATETIME")
+        self.assertTrue(convert_file(self.sample(), self.settings).ok)
+        row, = self.query("SELECT 數量, typeof(數量) AS kind FROM invitem")
+        self.assertEqual((row["數量"], row["kind"]), ("33.5000", "text"))
+
     def sample(self, suffix="0001", **changes):
         h = [""] * 38
         i = [""] * 17
