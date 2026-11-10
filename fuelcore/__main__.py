@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fuelcore import Settings, convert_files
+from fuelcore.codes import SHIP_BATCH_REMINDER, has_new_ship
 from fuelcore.schema import SCHEMA, init_sqlite, statements
 
 
@@ -209,6 +210,8 @@ def run_conversion(paths, settings):
     results = convert_files(paths, settings)
     for result in results:
         print(json.dumps(asdict(result), ensure_ascii=False))
+    if any(result.ok and has_new_ship(result.notes) for result in results):
+        print(SHIP_BATCH_REMINDER, file=sys.stderr)
     failures = sum(not result.ok for result in results)
     print(f"成功 {len(results) - failures}，失敗 {failures}")
     return int(bool(failures))

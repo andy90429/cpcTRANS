@@ -1,4 +1,5 @@
 import re
+from codecs import BOM_UTF8
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,8 +45,23 @@ class Result:
     notes: List[str] = field(default_factory=list)
 
 
-def read_txt(path):
-    return parse_txt_lines(Path(path).read_text(encoding="utf-8-sig").splitlines())
+def decode_txt(data):
+    encoding = "utf-8-sig" if data.startswith(BOM_UTF8) else "utf-8"
+    try:
+        return data.decode(encoding), encoding
+    except UnicodeDecodeError:
+        try:
+            payload = data[len(BOM_UTF8):] if encoding == "utf-8-sig" else data
+            return payload.decode("cp950"), "cp950"
+        except UnicodeDecodeError:
+            raise ValueError("TXT 無法以 UTF-8 或 cp950 讀取。") from None
+
+
+def read_txt(path, *, notes=None):
+    text, encoding = decode_txt(Path(path).read_bytes())
+    if encoding == "cp950" and notes is not None:
+        notes.append("TXT 無法以 UTF-8 讀取，已改用 cp950（Big5）。")
+    return parse_txt_lines(text.splitlines())
 
 
 def parse_txt_lines(lines):
@@ -114,7 +130,11 @@ def header_values(db, h, items, products, settings, notes):
     buyer_name = rules.clean_name(h[24], "BYNAME", notes)
     ship_name = rules.clean_name(h[20], "BANAME", notes)
     buyer_code = rules.buyer_code(buyer_name)
+    if len(buyer_code) < 6:
+        notes.append(f"買方代號只有 {len(buyer_code)} 碼：{buyer_code}（名稱 {buyer_name}）")
     country_code, country_name = rules.country(buyer_code, settings.countries, notes)
+    country_code = fit(country_code, SCHEMA["cusdec"]["BYCRTYCODE"]["COLUMN_TYPE"], "cusdec.BYCRTYCODE", notes)
+    country_name = fit(country_name, SCHEMA["cusdec"]["BYCRTYNAME"]["COLUMN_TYPE"], "cusdec.BYCRTYNAME", notes)
     other, ediother = rules.other_text(settings.other)
     values = dict(HEADER_FIXED)
     values.update(APLCHECK=h[29], STPLACE=h[4], BYCRTYCODE=country_code, BYCRTYNAME=country_name,
@@ -138,7 +158,8 @@ def header_values(db, h, items, products, settings, notes):
     # TODO(Q4): Omit every unspecified cusdec column so the database supplies its default.
     codes.buyer(db, fit(h[23], "varchar(10)", "mybuyer.BY002", notes),
                 fit(buyer_name, "varchar(200)", "mybuyer.BY003", notes),
-                buyer_code, settings.write_codes, notes)
+                buyer_code, settings.write_codes, notes, country=(country_code, country_name),
+                destination=(values["DESTCODE"], values["DESTNAME"]))
     values["BAID"] = codes.maintain_ship(db, h[27], h[22], ship_name, settings.write_codes, notes,
                                         ships_path=settings.ships_path, raw_name=h[20])
     return values
@@ -208,7 +229,7 @@ def transact(header, items, settings, notes, connection):
                 # Two concurrent MySQL inserts can collide on the same gap lock.
                 if db.mysql and attempt == 0 and error.args and error.args[0] in (1205, 1213):
                     continue
-                notes.extend(pending)
+                notes.extend(note for note in pending if not note.startswith(codes.F2_PREFIX))
                 raise
             from .declare_rate import conversion_rate_note
             reminder = conversion_rate_note(db, values)
@@ -221,13 +242,15 @@ def transact(header, items, settings, notes, connection):
 def convert_file(path, settings, connection=None):
     result = Result()
     try:
-        header, items = read_txt(path)
+        header, items = read_txt(path, notes=result.notes)
         result.sersno = header[1]
         declaration_number(header)
         transact(header, items, settings, result.notes, connection)
         result.ok = True
     except Exception as error:
         result.message = str(error)
+        if result.sersno:
+            result.notes.append(f"{codes.F2_PREFIX}轉檔未完成，未確認代碼檔")
     return result
 
 

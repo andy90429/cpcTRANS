@@ -2,14 +2,14 @@
 
 import re
 import shutil
-from codecs import BOM_UTF8
+from codecs import BOM_UTF8, getincrementaldecoder
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, localcontext
 from itertools import count
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from .convert import parse_txt_lines
+from .convert import decode_txt, parse_txt_lines
 from .report.calc import density_api, density_from_api, derive_api, rounded, table_factor, ton_to_liters
 
 
@@ -60,13 +60,24 @@ def field_value(text, original, places):
     return formatted(value, original, places) if value is not None else text
 
 
+def cp950_fields(line):
+    # A multibyte character can contain a pipe byte. Split only decoded pipes.
+    decoder = getincrementaldecoder("cp950")()
+    start = 0
+    for index, byte in enumerate(line):
+        if decoder.decode(bytes((byte,))) == "|":
+            yield line[start:index]
+            start = index + 1
+    yield line[start:]
+
+
 class TxtEditor:
     def __init__(self, path, source_folder=None):
         self.path = Path(path).resolve()
         self.source_folder = Path(source_folder).resolve() if source_folder else self.path.parent
         self.original_bytes = self.path.read_bytes()
-        self.encoding = "utf-8-sig" if self.original_bytes.startswith(BOM_UTF8) else "utf-8"
-        self.parts = re.split(r"(\r\n|\n)", self.original_bytes.decode(self.encoding))
+        text, self.encoding = decode_txt(self.original_bytes)
+        self.parts = re.split(r"(\r\n|\n)", text)
         self.positions = [index for index in range(0, len(self.parts), 2) if self.parts[index].strip()]
         header, items = parse_txt_lines(self.parts[::2])
         self.original_header = tuple(header)
@@ -223,10 +234,29 @@ class TxtEditor:
         return messages
 
     def to_bytes(self):
+        if self.encoding == "cp950":
+            return self.cp950_bytes()
         parts = self.parts.copy()
         for position, row in zip(self.positions, (self.header, *self.items)):
             parts[position] = "|".join(row)
         return "".join(parts).encode(self.encoding)
+
+    def cp950_bytes(self):
+        bom = BOM_UTF8 if self.original_bytes.startswith(BOM_UTF8) else b""
+        parts = re.split(rb"(\r\n|\n)", self.original_bytes[len(bom):])
+        for position, row, original in zip(
+            self.positions, (self.header, *self.items), (self.original_header, *self.original_items)
+        ):
+            if tuple(row) == original:
+                continue
+            try:
+                parts[position] = b"|".join(
+                    raw if value == previous else value.encode("cp950")
+                    for raw, value, previous in zip(cp950_fields(parts[position]), row, original)
+                )
+            except UnicodeEncodeError:
+                raise ValueError("修改內容含有 cp950（Big5）無法儲存的字元。") from None
+        return bom + b"".join(parts)
 
     def save(self):
         if not self.dirty:

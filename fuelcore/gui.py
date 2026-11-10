@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, font, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .codes import F2_PREFIX, SHIP_BATCH_REMINDER, has_new_ship
 from .edi import simulate_send
 from .logic_check import run_logic_check
 from .reply_view import ReplyPage
@@ -528,10 +529,13 @@ class Workbench:
 
         def work():
             settings = Settings.load(config_source(self.config_path))
+            new_ship = False
 
             def notify(path, result):
+                nonlocal new_ship
                 if result.ok:
                     failures.pop(path, None)
+                    new_ship = new_ship or has_new_ship(result.notes)
                 else:
                     failures[path] = result.message or "轉檔失敗"
                 self.events.put(("conversion", (path, result)))
@@ -544,15 +548,18 @@ class Workbench:
             ids, run = convert_batch(paths, settings, notify, on_archive=on_archive)
             summaries, warning = check_summaries(ids, settings) if ids else ({}, "")
             scan = scan_inputs(self.config_path, extra, failures, show_all=show_all)
-            return scan, extra, failures, ids, run, summaries, warning, settings.check_after_convert
+            return scan, extra, failures, ids, run, summaries, warning, settings.check_after_convert, new_ship
 
         def finish(value):
-            scan, self.extra, self.failures, ids, run, summaries, warning, auto = value
+            scan, self.extra, self.failures, ids, run, summaries, warning, auto, new_ship = value
+            batch_notice = SHIP_BATCH_REMINDER if new_ship else ""
+            if batch_notice:
+                self.add_log("提醒", batch_notice)
             if run is not None:
                 self.record_checks(run)
             self.show_files(scan)
             if run is not None:
-                self.check_window(ids, summaries, warning, save=True)
+                self.check_window(ids, summaries, "\n".join(filter(None, (warning, batch_notice))), save=True)
             elif not auto:
                 lines = ["這次沒有執行邏輯檢查（F6）。"]
                 for number in ids:
@@ -560,6 +567,8 @@ class Workbench:
                 if warning:
                     lines.append(warning)
                 self.add_log("提醒", "\n".join(lines))
+                if batch_notice:
+                    lines.append(batch_notice)
                 messagebox.showinfo("轉檔完成", "\n".join(lines), parent=self.root)
 
         self.run_task("正在轉檔與處理檢查…", work, finish)
@@ -620,11 +629,11 @@ class Workbench:
 
     def call_note(self, number, summaries):
         result = self.conversions.get(number.upper())
-        notes = [note for note in result.notes if note.startswith("呼號（F2）：")] if result else []
+        notes = [note for note in result.notes if note.startswith(F2_PREFIX)] if result else []
         if notes:
             return "；".join(notes)
         header, _ = summaries.get(number, (("", "", ""), ()))
-        return f"呼號（F2）：{header[1] or '未取得呼號'}"
+        return f"{F2_PREFIX}{header[1] or '未取得呼號'}"
 
     def open_file_detail(self, event):
         if self.busy or self.files.identify_region(event.x, event.y) != "cell":
@@ -681,7 +690,7 @@ class Workbench:
                 conversion = self.conversions.get(number.upper())
                 notes = conversion.notes if conversion else ()
                 body.insert("end", "轉檔說明\n")
-                if not any(note.startswith("呼號（F2）：") for note in notes):
+                if not any(note.startswith(F2_PREFIX) for note in notes):
                     body.insert("end", self.call_note(number, summaries) + "\n")
                 for note in notes:
                     body.insert("end", note + "\n")
