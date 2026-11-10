@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .ships import SHIP_FILENAME
+
 
 def config_path(path):
     path = Path(path).resolve()
@@ -111,6 +113,7 @@ class NotifySettings:
 
 class Settings:
     def __init__(self, config, base):
+        self.ships_path = Path(base) / SHIP_FILENAME
         db = config["database"]
         self.test_only = db.getboolean("test_only", fallback=False)
         if not self.test_only:

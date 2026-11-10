@@ -1,3 +1,6 @@
+from .ships import load_ships
+
+
 RESTART = "CBS 已開著的話要整個關掉重開才看得到這艘船"
 
 
@@ -20,11 +23,22 @@ def normalize_call(value):
     return "".join((value or "").split()).upper()
 
 
-def ship_call(db, call, imo, name, notes):
+def ship_call(db, call, imo, name, notes, *, ships_path=None, raw_name=None):
     if call:
         return call
+    if ships_path is not None:
+        ships, warning = load_ships(ships_path)
+        if warning:
+            notes.append(warning)
+        local_name = (raw_name if raw_name is not None else name).strip()
+        for field, value, label in (("imo", imo.strip(), "IMO"), ("name", local_name, "船名")):
+            match = next((ship for ship in ships if getattr(ship, field).casefold() == value.casefold()), None)
+            if match is not None:
+                resolved = normalize_call(match.call_sign)
+                notes.append(f"自動填入呼號 {resolved}（依船舶資料 {label} {value}）")
+                return resolved
     table = db.table("myshipname")
-    for column, value in (("SN004", imo), ("SN003", name[:40])):
+    for column, value, label in (("SN004", imo, "IMO"), ("SN003", name[:40], "船名")):
         if not value.strip():
             continue
         rows = db.select(f"SELECT SN002 FROM {table} WHERE UPPER(TRIM({column})) = ?",
@@ -32,7 +46,9 @@ def ship_call(db, call, imo, name, notes):
         matches = {normalize_call(row[0]) for row in rows}
         matches.discard("")
         if len(matches) == 1:
-            return matches.pop()
+            resolved = matches.pop()
+            notes.append(f"自動填入呼號 {resolved}（依船舶代碼表 {label} {value.strip()}）")
+            return resolved
     notes.append("請手動填呼號")
     return ""
 
@@ -63,10 +79,10 @@ def write_ship(db, call, imo, name, notes):
         notes.append(f"呼號（F2）：新增船舶呼號 {call} {name}，已確認寫入代碼檔（流水號 {key}）；{RESTART}")
 
 
-def maintain_ship(db, raw_call, imo, name, write, notes):
+def maintain_ship(db, raw_call, imo, name, write, notes, *, ships_path=None, raw_name=None):
     call = normalize_call(raw_call)
     try:
-        call = ship_call(db, call, imo, name, notes)
+        call = ship_call(db, call, imo, name, notes, ships_path=ships_path, raw_name=raw_name)
     except Exception as error:
         notes.append(f"查詢船舶代碼表失敗：{error}，請手動填呼號")
     if len(call) > 10:

@@ -139,7 +139,8 @@ def header_values(db, h, items, products, settings, notes):
     codes.buyer(db, fit(h[23], "varchar(10)", "mybuyer.BY002", notes),
                 fit(buyer_name, "varchar(200)", "mybuyer.BY003", notes),
                 buyer_code, settings.write_codes, notes)
-    values["BAID"] = codes.maintain_ship(db, h[27], h[22], ship_name, settings.write_codes, notes)
+    values["BAID"] = codes.maintain_ship(db, h[27], h[22], ship_name, settings.write_codes, notes,
+                                        ships_path=settings.ships_path, raw_name=h[20])
     return values
 
 

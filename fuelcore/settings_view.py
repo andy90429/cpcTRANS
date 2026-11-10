@@ -9,6 +9,8 @@ from .settings_editor import (
     PRODUCT_FIELDS, lookup_note, save_countries, save_other, save_products, unsupported_cp950, valid_buyer,
     valid_product,
 )
+from .ship_view import ShipPanel
+from .ships import SHIP_FILENAME
 from .workbench import config_source, save_options
 
 
@@ -22,7 +24,7 @@ class SettingsPages:
         for name, build in (
             ("轉檔", self.conversion), ("其他申報事項", self.other),
             ("油品表", self.products), ("買方國家", self.countries),
-            ("列印", self.printing), ("海關回覆", self.notifications),
+            ("列印", self.printing), ("海關回覆", self.notifications), ("船舶資料", self.ships),
         ):
             page = ttk.Frame(notebook, padding=12)
             notebook.add(page, text=name)
@@ -31,8 +33,14 @@ class SettingsPages:
 
     def tab_changed(self, event):
         notebook = event.widget
-        if notebook.tab(notebook.select(), "text") == "列印" and not self.printers_requested:
+        tab = notebook.tab(notebook.select(), "text")
+        if tab == "列印" and not self.printers_requested:
             self.reload_printers()
+        elif tab == "船舶資料":
+            self.ship_panel.refresh()
+
+    def ships(self, page, make_table):
+        self.ship_panel = ShipPanel(self.app, page, make_table, self.path.with_name(SHIP_FILENAME))
 
     def load(self):
         config = read_config(config_source(self.path))

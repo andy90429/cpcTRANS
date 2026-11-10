@@ -123,7 +123,7 @@ class SettingsPagesTest(unittest.TestCase):
         pages = app.settings_pages
         notebook = app.settings_notebook
         tabs = {notebook.tab(tab, "text"): root.nametowidget(tab) for tab in notebook.tabs()}
-        self.assertEqual(list(tabs), ["資料庫與路徑", "轉檔", "其他申報事項", "油品表", "買方國家", "列印", "海關回覆"])
+        self.assertEqual(list(tabs), ["資料庫與路徑", "轉檔", "其他申報事項", "油品表", "買方國家", "列印", "海關回覆", "船舶資料"])
         with patch("fuelcore.gui.simpledialog.askstring", side_effect=["錯誤", "測試"]) as ask, \
                 patch("fuelcore.gui.messagebox.showerror") as error:
             app.show("設定")

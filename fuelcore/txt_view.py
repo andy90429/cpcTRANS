@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .ship_view import ShipDialog, save_ship
+from .ships import SHIP_FILENAME, Ship, load_ships
 from .txt_edit import HEADER_FIELDS, ITEM_FIELDS
 
 
@@ -43,6 +45,17 @@ class TxtEditWindow:
         self.used_only = tk.BooleanVar(master=window, value=True)
         ttk.Checkbutton(header_bar, text="只顯示有資料或有用到的欄位", variable=self.used_only,
                         command=self.render).pack(side="left", padx=12)
+        self.ships_path = app.config_path.with_name(SHIP_FILENAME)
+        ttk.Label(header_bar, text="選船").pack(side="left")
+        self.ship_combo = ttk.Combobox(header_bar, state="readonly", width=22)
+        self.ship_combo.pack(side="left", padx=(6, 8))
+        self.ship_combo.bind("<<ComboboxSelected>>", self.select_ship)
+        self.add_ship_button = ttk.Button(header_bar, text="加入船舶清單", command=self.add_ship)
+        self.add_ship_button.pack(side="left")
+        ships, warning = load_ships(self.ships_path)
+        self.show_ships(ships)
+        if warning:
+            app.add_log("提醒", warning)
         panel, self.headers = make_table(page, (
             ("index", "欄號", 55, False), ("label", "說明", 175, False), ("value", "內容", 220, True),
             ("original", "原值", 220, True),
@@ -67,7 +80,7 @@ class TxtEditWindow:
         self.messages.grid(row=7, column=0, sticky="ew")
         buttons = ttk.Frame(page)
         buttons.grid(row=8, column=0, sticky="ew", pady=(8, 0))
-        self.actions = []
+        self.actions = [self.add_ship_button]
         for label, action in (("還原", self.restore), ("存檔", self.save), ("取消", self.close),
                               ("用記事本開啟", self.open_notepad)):
             button = ttk.Button(buttons, text=label, command=action,
@@ -154,7 +167,36 @@ class TxtEditWindow:
 
     def restore(self):
         self.editor.restore()
+        self.ship_combo.set("")
         self.render()
+
+    def show_ships(self, ships):
+        self.ships = ships
+        self.ship_combo.configure(values=tuple(ship.name for ship in ships))
+
+    def select_ship(self, _=None):
+        index = self.ship_combo.current()
+        if self.saving or index < 0:
+            return
+        ship = self.ships[index]
+        for column, value in ((20, ship.name), (22, ship.imo), (27, ship.call_sign)):
+            self.editor.edit_header(column, value)
+        if ship.buyer_id:
+            self.editor.edit_header(23, ship.buyer_id)
+        self.render()
+
+    def add_ship(self):
+        if self.app.busy or self.saving:
+            return
+        header = self.editor.header
+        dialog = ShipDialog(self.app, self.window, Ship(header[20], header[22], header[27], header[23]))
+        if dialog.result is not None:
+            def finish(ships):
+                if self.window.winfo_exists():
+                    self.show_ships(ships)
+                self.app.add_log("成功", f"已加入船舶清單：{dialog.result.name}")
+
+            save_ship(self.app, self.window, self.ships_path, finish, dialog.result)
 
     def close(self):
         if self.saving:
