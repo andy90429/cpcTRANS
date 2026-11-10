@@ -13,6 +13,14 @@ path = fuelcore_test.sqlite3
 [print]
 printer =
 
+[logic_check]
+; FUELCORE_LOGIC_PLUGIN can override this example path.
+plugin_dir = C:\example\只放本機_邏輯檢查外掛
+python_exe =
+timeout_seconds = 120
+; For MySQL use a dedicated test copy of cbssetcontent.
+rules_database = cbssetcontent_test
+
 [conversion]
 user_code = USER1
 cusboxno = Z000

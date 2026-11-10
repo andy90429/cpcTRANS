@@ -42,10 +42,32 @@ class EdiSettings:
         return cls(**values)
 
 
+@dataclass(frozen=True)
+class LogicCheckSettings:
+    plugin_dir: Path = None
+    python_exe: str = ""
+    timeout_seconds: int = 120
+    rules_database: str = ""
+
+    @classmethod
+    def load(cls, config, base):
+        section = "logic_check"
+        directory = config.get(section, "plugin_dir", fallback="").strip()
+        executable = config.get(section, "python_exe", fallback="").strip()
+        if executable and ("/" in executable or "\\" in executable):
+            executable = str(Path(base) / executable)
+        timeout = config.getint(section, "timeout_seconds", fallback=120)
+        if timeout <= 0:
+            raise ValueError("[logic_check] timeout_seconds 必須大於 0")
+        return cls(Path(base) / directory if directory else None, executable, timeout,
+                   config.get(section, "rules_database", fallback="").strip())
+
+
 class Settings:
     def __init__(self, config, base):
         db = config["database"]
-        if not db.getboolean("test_only", fallback=False):
+        self.test_only = db.getboolean("test_only", fallback=False)
+        if not self.test_only:
             raise ValueError("必須設定 test_only = yes")
         self.driver = db["driver"]
         if self.driver == "sqlite":
@@ -73,6 +95,7 @@ class Settings:
                          for key, value in config["products"].items()}
         self.edi = EdiSettings.from_section(config["edi"]) if config.has_section("edi") else None
         self.printer = config.get("print", "printer", fallback="").strip()
+        self.logic_check = LogicCheckSettings.load(config, base)
 
     @classmethod
     def load(cls, path):

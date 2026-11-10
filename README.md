@@ -73,6 +73,22 @@ python -m fuelcore schema --config fuelcore.ini --output fuelcore_test.sql
 
 MySQL 報單表與代碼表使用同一個連線和交易。船舶代碼維護若發生可回復錯誤，回滾該段並留下說明。SQLite 把有小數位的欄位存成定點文字，以保留尾端的零供測試核對。
 
+## CBS 邏輯檢查（F6）
+
+將本機外掛路徑填入 `fuelcore.ini` 的 `[logic_check] plugin_dir`，或設定 `FUELCORE_LOGIC_PLUGIN` 覆蓋。外掛的進入點為 `run_check.py`。直接用 Python 執行 fuelcore 時可將 `python_exe` 留空。封裝版請填本機 Python 執行檔路徑。逾時預設為 120 秒。
+
+```powershell
+python -m fuelcore check TEST00A10E0777 --config fuelcore.ini
+python -m fuelcore check TEST00A10E0777 --config fuelcore.ini --save
+python -m fuelcore check TEST00A10E0777 --config fuelcore.ini --output 檢查結果.json
+```
+
+查詢使用測試庫。MySQL 的報單、代碼與 `[logic_check] rules_database` 請指定各自的測試庫，並使用權限限於這些測試庫的帳號。寫入需要 `test_only = yes`、通過測試庫名稱檢查和明確指定 `--save`。SQLite 測試把報單、代碼和規則表放在同一個檔案。
+
+工作台選取已轉入的報單後，可按「邏輯檢查」做唯讀檢查，再雙擊報單查看訊息。送信模擬依報單現有的 `STATUS=Y` 判斷，尚未通過時會提示執行 `check --save`。
+
+外掛結構和需要的 CBS 規則資料見 [邏輯檢查調查](docs/邏輯檢查_調查.md)。
+
 ## 送信模擬
 
 在自己的 `fuelcore.ini` 新增 `[edi]`。MySQL 會透過同一組連線查詢報單、EDI 與 XML 設定測試庫。`company_code` 是檔名使用的 8 碼公司代碼，`user` 用於擬新增的送信紀錄。SQLite 測試可將測試資料表放在同一個檔案。

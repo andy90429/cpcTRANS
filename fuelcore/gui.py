@@ -6,6 +6,7 @@ from pathlib import Path
 from tkinter import filedialog, font, messagebox, ttk
 
 from .convert import convert_file
+from .logic_check import run_logic_check
 from .report_view import ReportPage
 from .settings import Settings
 from .workbench import (
@@ -98,6 +99,7 @@ class Workbench:
         self.busy = False
         self.extra = set()
         self.failures = {}
+        self.checks = {}
         self.rows = {}
         self.nav = {}
         self.pages = {}
@@ -184,6 +186,8 @@ class Workbench:
         self.add_button.pack(side="left", padx=(0, 8))
         self.refresh_button = ttk.Button(bar, text="重新整理", command=self.refresh)
         self.refresh_button.pack(side="left")
+        self.check_button = ttk.Button(bar, text="邏輯檢查", command=self.check_selected, state="disabled")
+        self.check_button.pack(side="left", padx=(8, 0))
         self.show_all_button = ttk.Checkbutton(bar, text="顯示全部", variable=self.show_all,
                                                command=self.refresh)
         self.show_all_button.pack(side="left", padx=(12, 0))
@@ -191,10 +195,12 @@ class Workbench:
         panel, self.files = make_table(source, (
             ("name", "檔名", 240, True), ("folder", "日期資料夾", 116, False),
             ("sersno", "報單號碼", 165, False), ("status", "狀態", 103, False),
+            ("logic", "邏輯檢查", 125, False),
         ), "extended")
         panel.grid(sticky="nsew")
         self.files.configure(height=7)
         self.files.bind("<<TreeviewSelect>>", lambda _: self.update_buttons())
+        self.files.bind("<Double-1>", self.show_check_detail)
 
         log = ttk.Frame(page, style="Card.TFrame", padding=14)
         log.grid(row=2, column=0, sticky="nsew")
@@ -309,7 +315,8 @@ class Workbench:
         def show_batch(start):
             end = start + 100
             for file in files[start:end]:
-                row = self.files.insert("", "end", values=(file.path.name, file.folder, file.sersno, file.status),
+                row = self.files.insert("", "end", values=(file.path.name, file.folder, file.sersno, file.status,
+                                                           self.check_label(file)),
                                         tags=(file.status,))
                 self.rows[row] = file
                 if file.status == PENDING:
@@ -357,11 +364,61 @@ class Workbench:
 
     def show_result(self, result_event):
         path, result = result_event
+        if result.ok:
+            self.checks.pop(result.sersno, None)
         label = f"{path.name}（{result.sersno}）" if result.sersno else path.name
         for note in reversed(result.notes):
             self.add_log("提醒", note)
         message = result.message or ("已轉入" if result.ok else "轉檔失敗")
         self.add_log("成功" if result.ok else "失敗", f"{label}：{message}")
+
+    def check_label(self, file):
+        result = self.checks.get(file.sersno)
+        return (result.label if result else "未檢查") if file.status == IMPORTED else ""
+
+    def check_selected(self):
+        ids = list(dict.fromkeys(self.rows[row].sersno for row in self.files.selection()
+                                 if row in self.rows and self.rows[row].status == IMPORTED))
+        if not ids:
+            return
+
+        def work():
+            try:
+                settings = Settings.load(config_source(self.config_path))
+            except (ValueError, OSError, KeyError):
+                raise ValueError("無法讀取 fuelcore 測試庫設定。請核對 test_only 與資料庫名稱。") from None
+            return run_logic_check(ids, settings)
+
+        def finish(run):
+            for result in run.results:
+                self.checks[result.sersno] = result
+                self.add_log("成功" if result.passed else "提醒", f"{result.sersno} {result.label}")
+            for row, file in self.rows.items():
+                if file.sersno in ids:
+                    self.files.set(row, "logic", self.check_label(file))
+
+        self.run_task("正在執行邏輯檢查…", work, finish,
+                      lambda message: messagebox.showerror("邏輯檢查", message, parent=self.root))
+
+    def show_check_detail(self, event):
+        row = self.files.identify_row(event.y)
+        file = self.rows.get(row)
+        result = self.checks.get(file.sersno) if file and file.status == IMPORTED else None
+        if result is None:
+            return
+        window = tk.Toplevel(self.root)
+        window.title(f"{result.sersno} · {result.label}")
+        window.transient(self.root)
+        body = tk.Text(window, width=72, height=18, wrap="word")
+        scrollbar = ttk.Scrollbar(window, orient="vertical", command=body.yview)
+        body.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        body.pack(side="left", fill="both", expand=True)
+        body.insert("end", f"{result.label}　執行 {result.rules_total} 條，無法檢查 {result.rules_unparsed} 條\n")
+        for message in result.messages:
+            item = f"第 {message.item} 項 " if message.item else ""
+            body.insert("end", f"\n[{message.level}] {item}{message.rule_id} {message.field}\n{message.text}\n")
+        body.configure(state="disabled")
 
     def current_fields(self):
         return {key: value.get() for key, value in self.values.items()}
@@ -381,6 +438,7 @@ class Workbench:
 
         def finish(scan):
             self.failures.clear()
+            self.checks.clear()
             self.show_feedback(f"已儲存 {self.config_path}")
             self.show_files(scan)
 
@@ -406,6 +464,9 @@ class Workbench:
         can_start = not self.busy and any(self.rows[row].status not in (IMPORTED, UNREADABLE)
                                           for row in self.files.selection() if row in self.rows)
         self.start_button.state(["!disabled" if can_start else "disabled"])
+        can_check = not self.busy and any(self.rows[row].status == IMPORTED
+                                          for row in self.files.selection() if row in self.rows)
+        self.check_button.state(["!disabled" if can_check else "disabled"])
         for button in [self.add_button, self.refresh_button, self.show_all_button, *self.setting_actions]:
             button.state(["disabled" if self.busy else "!disabled"])
 

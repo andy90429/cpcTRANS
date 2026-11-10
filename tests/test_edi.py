@@ -173,12 +173,15 @@ class EdiFixtureTest(unittest.TestCase):
         self.assertEqual(self.db.select("SELECT OutputSequence FROM sequence"), [("1",)])
 
     def test_simulation_rejects_sent_status_without_using_sequence(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, patch("fuelcore.logic_check.run_logic_check") as checker:
             result = simulate_send(self.settings, REPORTS, temp, connection=self.connection)
+            checker.assert_not_called()
             self.assertEqual((result.planned, result.rejected), (0, 2))
             self.assertEqual(list(result.directory.glob("*.xml")), [])
             report = (result.directory / "模擬結果.txt").read_text(encoding="utf-8-sig")
             self.assertIn("STATUS=S，僅 Y 可規劃送信", report)
+            self.assertIn("尚未通過邏輯檢查（F6）", report)
+            self.assertIn(f"check {REPORTS[0]} --save", report)
             self.assertNotIn("OutputSequence=", report)
 
 

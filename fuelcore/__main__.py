@@ -25,6 +25,11 @@ def main():
     schema.add_argument("--config", required=True)
     schema.add_argument("--csv", type=Path, default=SCHEMA)
     schema.add_argument("--output", type=Path)
+    check = commands.add_parser("check", help="用本機外掛執行 CBS 邏輯檢查")
+    check.add_argument("sersno", nargs="+")
+    check.add_argument("--config", default="fuelcore.ini")
+    check.add_argument("--save", action="store_true", help="將結果寫入測試庫")
+    check.add_argument("--output", type=Path, help="另存 JSON 結果")
     simulate = commands.add_parser("simulate-send", help="在測試庫以唯讀方式規劃送信")
     simulate.add_argument("sersno", nargs="+")
     simulate.add_argument("--config", required=True)
@@ -62,6 +67,8 @@ def main():
             print(error, file=sys.stderr)
             return 1
         return 0
+    if args.command == "check":
+        return run_check_command(args)
     settings = Settings.load(args.config)
     if args.command == "print-report":
         from fuelcore.report.printing import print_report
@@ -123,6 +130,35 @@ def forward_cli(folder):
     ctypes.windll.kernel32.AttachConsole(-1)
     command = [str(folder / "fuelcore_cli.exe"), *sys.argv[1:]]
     return subprocess.call(command, close_fds=False)
+
+
+def run_check_command(args):
+    from fuelcore.logic_check import run_logic_check
+
+    if args.output and args.output.suffix.casefold() != ".json":
+        print("--output 請指定 .json 檔案", file=sys.stderr)
+        return 2
+    try:
+        settings = Settings.load(args.config)
+    except (ValueError, OSError, KeyError):
+        print("無法讀取 fuelcore 測試庫設定。請核對 test_only 與資料庫名稱。", file=sys.stderr)
+        return 2
+    run = run_logic_check(args.sersno, settings, save=args.save)
+    for result in run.results:
+        saved = "，已寫回測試庫" if result.saved else ""
+        print(f"{result.sersno} {result.label}（執行 {result.rules_total} 條，無法檢查 {result.rules_unparsed} 條{saved}）")
+        for message in result.messages:
+            location = " ".join(part for part in (message.rule_id, message.field,
+                                                  f"第 {message.item} 項" if message.item else "") if part)
+            print(f"  [{message.level}] {location + ' · ' if location else ''}{message.text}")
+    if args.output:
+        try:
+            with args.output.open("x", encoding="utf-8") as stream:
+                stream.write(run.to_json() + "\n")
+        except OSError:
+            print("無法建立 JSON 結果檔，請指定可寫入的新檔名。", file=sys.stderr)
+            return 2
+    return int(not run.results or any(not result.passed for result in run.results))
 
 
 def run_conversion(paths, settings):

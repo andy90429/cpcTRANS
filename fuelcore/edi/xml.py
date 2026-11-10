@@ -223,7 +223,8 @@ class SendXmlBuilder:
         declaration = declarations[0]
         status = row_text(declaration, "STATUS").strip()
         if ready_only and status != "Y":
-            raise EdiError(f"{sersno} STATUS={status or '空白'}，僅 Y 可規劃送信")
+            raise EdiError(f"{sersno} STATUS={status or '空白'}，僅 Y 可規劃送信。"
+                           f"尚未通過邏輯檢查（F6），請先執行 check {sersno} --save")
 
         def elements(node, context):
             table = node.table
