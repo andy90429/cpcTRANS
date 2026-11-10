@@ -14,6 +14,7 @@ from .report_view import ReportPage
 from .send_check import prepare, split_numbers
 from .settings import Settings, read_config
 from .settings_view import SettingsPages
+from .tools_view import ToolsPage
 from .txt_edit import TxtEditor
 from .txt_view import TxtEditWindow
 from .workbench import (
@@ -149,6 +150,7 @@ class Workbench:
         for name, build in (("轉檔", self.build_convert_page), ("報單列印", self.build_report_page),
                             ("送出前確認", self.build_send_page),
                             ("海關回覆", self.build_reply_page),
+                            ("工具", self.build_tools_page),
                             ("設定", self.build_settings_page)):
             item = ttk.Frame(sidebar, style="Nav.TFrame")
             item.pack(fill="x", pady=2)
@@ -210,6 +212,9 @@ class Workbench:
 
     def build_reply_page(self, page):
         self.reply_page = ReplyPage(self, page, make_table)
+
+    def build_tools_page(self, page):
+        self.tools_page = ToolsPage(self, page)
 
     def build_send_page(self, page):
         page.columnconfigure(0, weight=1)
@@ -744,7 +749,8 @@ class Workbench:
         self.simulate_button.state(["!disabled" if can_simulate else "disabled"])
         self.send_check_button.state(["disabled" if self.busy else "!disabled"])
         self.reply_page.refresh_button.state(["disabled" if self.busy else "!disabled"])
-        for button in [self.add_button, self.refresh_button, self.show_all_button, *self.setting_actions]:
+        for button in [self.add_button, self.refresh_button, self.show_all_button,
+                       *self.setting_actions, *self.tools_page.buttons]:
             button.state(["disabled" if self.busy else "!disabled"])
 
     def run_task(self, title, work, finish, on_error=None):

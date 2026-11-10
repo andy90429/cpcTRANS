@@ -85,6 +85,8 @@ MySQL 報單表與代碼表使用同一個連線和交易。船舶代碼維護�
 
 ## 每旬報關匯率
 
+工作台「工具」的「每旬匯率（先模擬再更新）」會先顯示模擬報告，並存到 `列印輸出` 旁的 `診斷` 資料夾。有本旬差異才會詢問是否寫入測試庫，確認後會寫入並讀回核對。若要離線操作，按「從離線檔案模擬匯率」，選本旬 JSON，並視需要選歷史 TXT。
+
 ```powershell
 python -m fuelcore rate-simulate --config fuelcore.ini --output .\匯率報告
 python -m fuelcore rate-import --config fuelcore.ini
@@ -96,6 +98,8 @@ python -m fuelcore rate-simulate --config fuelcore.ini --output .\匯率報告 -
 模擬只查詢資料庫。匯入會顯示變更，輸入 `y` 或指定 `--yes` 才寫入測試庫。歷史檔只用於核對最近九個已完成旬別。轉檔後，若測試庫已有同一期旬的買進匯率，程式會在報單匯率不符時加一行提醒。
 
 ## Windows PFX 憑證檢查
+
+工作台「工具」的「憑證檢查」可選擇 PFX 檔、選填登錄到期日，再以遮蔽欄位輸入密碼。結果顯示憑證主體、到期日、剩餘天數、狀態及登錄到期日的比對。檢查由使用者手動啟動。
 
 ```powershell
 python -m fuelcore cert-check .\signing.pfx
