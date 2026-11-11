@@ -1,8 +1,9 @@
 import json
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .report import validate_report_assets
 from .report.printing import list_printers
 from .settings import OTHER_FIELDS, other_fields, read_config
 from .settings_editor import (
@@ -205,12 +206,33 @@ class SettingsPages:
         self.run_save(lambda: persist(self.path, rows))
 
     def printing(self, page, _):
+        self.print_page = page
         page.columnconfigure(1, weight=1)
         ttk.Label(page, text="報單印表機").grid(row=0, column=0, sticky="w", padx=(0, 10))
         self.printer = ttk.Combobox(page, textvariable=self.variable("print", "printer", ""))
         self.printer.grid(row=0, column=1, sticky="ew")
         self.action(page, "重新讀取印表機", self.reload_printers).grid(row=0, column=2, padx=(10, 0))
-        self.save_button(page, lambda: self.save_form("print"), 1)
+        self.entry(page, 1, "CBS 報表資料夾", "print", "reports_dir")
+        self.action(page, "選資料夾…", self.choose_reports).grid(row=1, column=2, padx=(10, 0))
+        ttk.Label(page, text="請選擇含 N5203.Rpt、N5203CUS.Rpt 和報表底圖的資料夾。").grid(
+            row=2, column=1, columnspan=2, sticky="w")
+        self.save_button(page, self.save_print, 3)
+
+    def choose_reports(self):
+        selected = filedialog.askdirectory(parent=self.print_page, title="選擇 CBS 報表資料夾", mustexist=True)
+        if selected:
+            self.forms["print", "reports_dir"][0].set(selected)
+
+    def save_print(self):
+        directory = self.forms["print", "reports_dir"][0].get().strip()
+        printer = self.printer.get().strip()
+
+        def save():
+            if directory:
+                validate_report_assets(self.path.parent / directory)
+            save_options(self.path, {"print": {"printer": printer, "reports_dir": directory}})
+
+        self.run_save(save)
 
     def reload_printers(self):
         if self.app.busy:

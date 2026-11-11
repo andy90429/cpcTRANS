@@ -12,6 +12,7 @@ path = fuelcore_test.sqlite3
 
 [print]
 printer =
+reports_dir =
 
 [cleanup]
 print_days = 30

@@ -1,11 +1,14 @@
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 
 project = Path(SPECPATH)
 analysis = Analysis(
     [str(project / "fuelcore" / "__main__.py")],
     pathex=[str(project)],
     datas=[(str(project / "fuelcore" / "schema.csv"), "fuelcore"), (str(project / "pyproject.toml"), ".")],
+    hiddenimports=collect_submodules("reportlab.graphics.barcode"),
 )
 modules = PYZ(analysis.pure)
 utf8 = ("X utf8", None, "OPTION")

@@ -11,6 +11,7 @@ from fuelcore.report.rpx import Component, RpxDocument
 from fuelcore.schema import init_sqlite
 from fuelcore.settings import Settings
 from fuelcore.tools_view import ToolsPage
+from fuelcore.workbench import save_options
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +58,24 @@ class DiagnosticsTest(unittest.TestCase):
         database.assert_not_called()
         self.assertIn("未通過測試庫檢查", result.summary)
         self.assertNotIn("actual.sqlite3", result.summary)
+
+    def test_report_diagnostic_checks_configured_templates_and_bitmap(self):
+        reports = self.folder / "TEST 報表"
+        reports.mkdir()
+        page = Component("TGPage")
+        page.children.append(Component("TGTxt"))
+        page.set_text("PictureFile", "TEST.bmp")
+        data = RpxDocument.create("TEST", [page]).to_bytes()
+        for name in ("N5203.Rpt", "N5203CUS.Rpt"):
+            (reports / name).write_bytes(data)
+        save_options(self.config, {"print": {"reports_dir": reports.name}})
+        with patch.dict("os.environ", {"FUELCORE_CBS_REPORTS": ""}):
+            incomplete = collect_diagnostics(self.config)
+            self.assertIn("缺少可讀取的範本及底圖", incomplete.summary)
+            (reports / "TEST.bmp").touch()
+            ready = collect_diagnostics(self.config)
+            self.assertIn("CBS 報表資源目錄：可讀取", ready.summary)
+        self.assertNotIn(str(reports), ready.summary)
 
     def test_diagnostic_button_passes_only_redacted_summary_to_copy(self):
         page = ToolsPage.__new__(ToolsPage)

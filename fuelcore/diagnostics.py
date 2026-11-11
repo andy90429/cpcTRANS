@@ -10,12 +10,13 @@ from pathlib import Path
 
 from .db import Database
 from .declare_rate import require_test
+from .report import validate_report_assets
 from .report.comparison import compare_fronts
 from .report.editing import rpx_number
 from .report.rpx import RpxDocument, RpxError
 from .runtime import app_version
 from .schema import read_schema
-from .settings import Settings
+from .settings import Settings, read_reports_directory
 from .workbench import config_source
 
 
@@ -67,12 +68,12 @@ def collect_diagnostics(config_path, old_rpx=None):
         lines.append("F6 本機外掛：" + ("已找到入口" if installed else "未找到入口"))
         lines.append("EDI 測試庫：" + ("已設定" if settings.edi else "未設定"))
         lines.append("報單印表機：" + ("已指定" if settings.printer else "未指定"))
-    reports = os.environ.get("FUELCORE_CBS_REPORTS")
     try:
-        available = bool(reports and Path(reports).is_dir())
-    except OSError:
-        available = False
-    lines.append("CBS 報表資源目錄：" + ("可讀取" if available else "未設定或無法讀取"))
+        validate_report_assets(read_reports_directory(config_source(config_path)))
+    except (OSError, ValueError):
+        lines.append("CBS 報表資源目錄：未設定或缺少可讀取的範本及底圖")
+    else:
+        lines.append("CBS 報表資源目錄：可讀取")
     details = []
     if old_rpx and database_ready:
         try:

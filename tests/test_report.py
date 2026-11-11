@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
-from fuelcore.report import render_report
+from fuelcore.report import render_report, report_assets
 from fuelcore.report.formula import FormulaError, evaluate
 from fuelcore.report.layout import wrap_lines
 from fuelcore.report.rpx import Component, RpxDocument, RpxError, Value
@@ -27,6 +28,18 @@ def long(data, count=None):
 
 
 class RpxTest(unittest.TestCase):
+    def test_report_folder_explicit_path_and_environment_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            explicit = root / "explicit"
+            explicit.mkdir()
+            with patch.dict(os.environ, {"FUELCORE_CBS_REPORTS": str(root)}):
+                self.assertEqual(report_assets().root, root.resolve())
+                self.assertEqual(report_assets(explicit).root, explicit.resolve())
+            with patch.dict(os.environ, {"FUELCORE_CBS_REPORTS": ""}):
+                with self.assertRaisesRegex(RpxError, "設定 → 列印"):
+                    report_assets()
+
     def test_all_delphi_types_roundtrip_and_read_values(self):
         chinese = "測試".encode("cp950")
         wide = "甲𠀀".encode("utf-16le")
@@ -127,8 +140,10 @@ class ReportPdfTest(unittest.TestCase):
             """)
             statements = []
             connection.set_trace_callback(statements.append)
-            result = render_report(settings(), [REPORTS[0]], root / "output", reports=reports,
-                                   cache=root / "cache", connection=connection)
+            cfg = settings()
+            cfg.reports_dir = reports
+            with patch.dict(os.environ, {"FUELCORE_CBS_REPORTS": str(root / "wrong")}):
+                result = render_report(cfg, [REPORTS[0]], root / "output", cache=root / "cache", connection=connection)
             self.assertTrue(statements)
             self.assertTrue(all(sql.startswith("SELECT ") for sql in statements), statements)
             self.assertEqual((reports / "Front.bmp").read_bytes(), source_before)

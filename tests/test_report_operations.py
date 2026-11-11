@@ -75,16 +75,22 @@ class ReportOperationsTest(unittest.TestCase):
             self.assertTrue((backup / "TEST.Rpx").exists())
             self.assertTrue((root / "TEST_COPY.Rpx").exists())
 
-    def test_correction_print_requires_confirmation_and_uses_shell_print(self):
+    def test_correction_print_generates_from_current_report_only_after_confirmation(self):
         page = ReportPage.__new__(ReportPage)
         page.workbench = Mock(busy=False)
         page.page = Mock()
         page.status = Mock()
-        page.correction_path = Path("TEST.xlsx")
+        page.output = Path("TEST output")
+        report, index = object(), 2
+        page.active_report = Mock(return_value=(report, index))
         page.task = lambda title, work, finish: finish(work())
+        path = page.output / "TEST.xlsx"
         with patch("fuelcore.report_view.messagebox.askokcancel", side_effect=(False, True)), \
+                patch("fuelcore.report_view.export_correction", return_value=path) as export, \
                 patch("fuelcore.report_view.windows_open") as launch:
             page.print_correction()
+            export.assert_not_called()
             launch.assert_not_called()
             page.print_correction()
-        launch.assert_called_once_with(page.correction_path, "print")
+        export.assert_called_once_with(report, index, None, page.output)
+        launch.assert_called_once_with(path, "print")

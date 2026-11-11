@@ -28,6 +28,20 @@ def read_config(path):
     return parse_config(path.read_text(encoding="utf-8-sig"), path)
 
 
+def reports_directory(config, base):
+    directory = config.get("print", "reports_dir", fallback="").strip()
+    return Path(base) / directory if directory else None
+
+
+def read_reports_directory(path):
+    """Read the print path independently of the database settings."""
+    try:
+        config = read_config(path)
+    except (OSError, ValueError):
+        return None
+    return reports_directory(config, Path(path).resolve().parent)
+
+
 OTHER_FIELDS = ("OTHER", "EDIOTHER")
 
 
@@ -150,6 +164,7 @@ class Settings:
         self.edi = (EdiSettings.from_section(config["edi"])
                     if config.has_section("edi") and config.getboolean("edi", "enabled", fallback=True) else None)
         self.printer = config.get("print", "printer", fallback="").strip()
+        self.reports_dir = reports_directory(config, base)
         self.logic_check = LogicCheckSettings.load(config, base)
         self.check_after_convert = config.getboolean("workflow", "check_after_convert", fallback=True)
         self.archive_after_convert = config.getboolean("workflow", "archive_after_convert", fallback=True)

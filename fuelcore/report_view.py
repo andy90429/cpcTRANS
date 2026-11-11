@@ -17,7 +17,7 @@ from .report.editing import EditableReport, report_ids
 from .report.printing import plan_print, print_batch
 from .report.retention import BATCH_NAME, MARKER, ordinary
 from .report.rpx import RpxError
-from .settings import Settings
+from .settings import Settings, read_reports_directory
 from .runtime import record
 from .workbench import config_source
 
@@ -83,7 +83,6 @@ class ReportPage:
         self.saved_report = self.saved_pdf = None
         self.differences = None
         self.saved_differences = None
-        self.correction_path = None
         self.dirty_notice = tk.StringVar()
         self.selection = tk.StringVar()
         self.number = tk.StringVar()
@@ -106,13 +105,15 @@ class ReportPage:
         ttk.Button(load, text="從資料庫產生", style="Primary.TButton", command=self.load).grid(row=0, column=3)
         ttk.Button(load, text="開啟 Rpx…", command=self.open).grid(row=0, column=4, padx=(6, 0))
         ttk.Button(load, text="我存過的檔案", command=self.saved_files).grid(row=1, column=1, sticky="w", pady=(4, 0))
+        ttk.Button(load, text="設定報表資料夾…", command=workbench.show_print_settings).grid(
+            row=1, column=3, columnspan=2, sticky="e", pady=(4, 0))
         actions = ttk.Frame(page)
         actions.grid(sticky="ew", pady=8)
         self.buttons = {}
         for index, (label, command) in enumerate((
-            ("輸出 PDF", self.export), ("直接列印", self.print_report), ("試算", self.open_trial),
-            ("更正申請書 Excel", self.export_excel), ("修改欄位", self.open_editor),
-            ("另存 Rpx", self.save_rpx), ("列印更正申請書", self.print_correction),
+            ("修改欄位", self.open_editor), ("修改數量", self.open_trial),
+            ("列印報單", self.print_report), ("列印更正申請書", self.print_correction),
+            ("輸出 PDF", self.export), ("更正申請書 Excel", self.export_excel), ("另存 Rpx", self.save_rpx),
         )):
             button = ttk.Button(actions, text=label, command=command, state="disabled")
             button.grid(row=index // 4, column=index % 4, sticky="ew", padx=(0, 6), pady=2)
@@ -198,7 +199,11 @@ class ReportPage:
             self.open_path(path)
 
     def open_path(self, path):
-        self.load_task(lambda: EditableReport.open(Path(path), backup=self.output), compare=True)
+        def source():
+            reports = read_reports_directory(config_source(self.workbench.config_path))
+            return EditableReport.open(Path(path), reports=reports, backup=self.output)
+
+        self.load_task(source, compare=True)
 
     def compare(self, report):
         try:
@@ -229,7 +234,6 @@ class ReportPage:
         if not edited:
             self.saved_report, self.saved_pdf = report, pdf
             self.saved_differences = self.differences
-            self.correction_path = None
         choices = [f"{i + 1} · {number} · {side}" for i, (number, side) in enumerate(
             (number, side) for number in report.batch.ids for side in ("正面", "背面")
         )]
@@ -237,7 +241,6 @@ class ReportPage:
         self.status.set("已更新預覽。" if edited else f"已載入 {len(report.batch.ids)} 張報單。")
         for button in self.buttons.values():
             button.state(["!disabled"])
-        self.buttons["列印更正申請書"].state(["!disabled" if self.correction_path else "disabled"])
         self.update_dirty()
         self.show_page(index)
 
@@ -421,22 +424,22 @@ class ReportPage:
             self.show_error(error)
 
     def save_excel(self, report, index, inputs=None, *, exchange=None):
-        def ready(path):
-            self.correction_path = path
-            self.buttons["列印更正申請書"].state(["!disabled"])
-            self.saved(path)
-
         self.task("產生更正申請書…", lambda: export_correction(report, index, inputs, self.output,
-                                                               exchange=exchange), ready)
+                                                               exchange=exchange), self.saved)
 
     def print_correction(self):
-        path = self.correction_path
-        if not path or self.workbench.busy:
+        if self.workbench.busy:
             return
-        if not messagebox.askokcancel("列印更正申請書", f"用 Windows 預設程式列印單頁更正申請書？\n{path.name}",
+        report, index = self.active_report()
+        if not messagebox.askokcancel("列印更正申請書", "用 Windows 預設程式列印目前報單的更正申請書？",
                                       parent=self.page):
             return
-        self.task("送出更正申請書列印…", lambda: windows_open(path, "print"),
+
+        def work():
+            path = export_correction(report, index, None, self.output)
+            windows_open(path, "print")
+
+        self.task("產生並列印更正申請書…", work,
                   lambda _: self.status.set("已交給 Windows 預設程式列印。"))
 
     def saved_files(self):
@@ -479,7 +482,7 @@ class ReportPage:
         ttk.Button(actions, text="開啟資料夾", command=open_folder).pack(side="left", padx=6)
         tree.bind("<Double-1>", open_selected)
 
-    def change(self, index, operation, *, save=False):
+    def change(self, index, operation, *, save=False, after=None):
         def work():
             report = operation()
             differences = self.compare(report)[0] if self.differences is not None else None
@@ -488,6 +491,8 @@ class ReportPage:
         def done(result):
             report, pdf, self.differences = result
             self.install(report, pdf, index * 2, edited=True)
+            if after:
+                after()
             if save:
                 self.save_rpx()
 
@@ -530,10 +535,11 @@ class ReportPage:
                 return
             position = fields[picker.current()][0]
             value = editor.get("1.0", "end-1c")
-            self.change(index, lambda: report.edit(index, position, value))
-            window.destroy()
+            self.change(index, lambda: report.edit(index, position, value), after=window.destroy)
 
-        ttk.Button(window, text="套用", command=apply).grid(row=2, column=0, sticky="e", padx=12, pady=10)
+        ttk.Label(window, text="套用數量變更時會自動重算金額、淨重與統計數量。").grid(
+            row=2, column=0, sticky="w", padx=12, pady=(8, 0))
+        ttk.Button(window, text="套用", command=apply).grid(row=3, column=0, sticky="e", padx=12, pady=10)
         picker.bind("<<ComboboxSelected>>", load_field)
         picker.current(0)
         load_field()
@@ -610,8 +616,8 @@ class TrialDialog:
         self.save = ttk.Button(bar, text="另存 Rpx", command=lambda: self.apply(save=True))
         self.excel = ttk.Button(bar, text="產生更正申請書", command=self.export)
         self.apply_button.pack(side="left", padx=(0, 6))
-        self.save.pack(side="left", padx=(0, 6))
-        self.excel.pack(side="left")
+        self.excel.pack(side="left", padx=(0, 6))
+        self.save.pack(side="left")
         self.update()
         self.window.grab_set()
 

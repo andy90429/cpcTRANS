@@ -109,10 +109,11 @@ class TrialFields:
                   if self.totals[key] is not None}
         return replace(result, rows=rows, **totals)
 
-    def inputs(self, densities=()):
-        return tuple(ItemInput(number(fields["quantity"], required=True), number(fields["price"], required=True),
+    def inputs(self, densities=(), *, original=None):
+        price_items = self.items if original is None else original.items
+        return tuple(ItemInput(number(fields["quantity"], required=True), number(filed["price"], required=True),
                                densities[index] if index < len(densities) else None)
-                     for index, (_, fields) in enumerate(self.items))
+                     for index, ((_, fields), (_, filed)) in enumerate(zip(self.items, price_items)))
 
     def apply(self, result):
         show_number(self.totals["exchange"], result.exchange)
@@ -238,6 +239,18 @@ class EditableReport:
     def edit(self, index, field_index, value):
         if field_index not in {position for position, _, _ in self.fields(index)}:
             raise RpxError("找不到可修改的顯示欄位")
+        page = self.batch.fronts[index]
+        field = page.children[field_index]
+        current = TrialFields(page)
+        for item_index, (_, columns) in enumerate(current.items):
+            if columns["quantity"] is field:
+                inputs = list(current.inputs(self.densities.get(index, ()),
+                                             original=TrialFields(self.originals[index])))
+                quantity = decimal_input(value)
+                if quantity == inputs[item_index].quantity:
+                    return self
+                inputs[item_index] = replace(inputs[item_index], quantity=quantity)
+                return self.apply(index, inputs)
         copy = deepcopy(self)
         copy.batch.fronts[index].children[field_index].set_text("Caption", value)
         return copy

@@ -11,6 +11,9 @@ from .retention import mark_batch
 from .rpx import RpxDocument, RpxError
 
 
+REPORT_TEMPLATES = ("N5203.Rpt", "N5203CUS.Rpt")
+
+
 @dataclass(frozen=True)
 class ReportResult:
     rpx: Path
@@ -83,11 +86,11 @@ def reference_comparison(assets, reports, warnings):
 
 
 def prepare_report(settings, sersnos, *, reports=None, cache=None, connection=None):
-    assets, cache = report_resources(reports, cache)
+    assets, cache = report_resources(reports or settings.reports_dir, cache)
     ids = [sersno.strip().upper() for sersno in sersnos]
     if not ids or any(not re.fullmatch(r"[A-Z0-9]{14}", sersno) for sersno in ids):
         raise RpxError("請提供 14 碼英數報單號碼")
-    front, back = assets.page("N5203.Rpt"), assets.page("N5203CUS.Rpt")
+    front, back = (assets.page(name) for name in REPORT_TEMPLATES)
     pages, fronts, warnings = [], [], []
     with closing(Database(settings, connection, read_only=True)) as db:
         reader = DeclarationReader(db)
@@ -101,11 +104,24 @@ def prepare_report(settings, sersnos, *, reports=None, cache=None, connection=No
     return ReportBatch(ids, assets, cache, pages, fronts, warnings)
 
 
-def report_resources(reports=None, cache=None):
+def report_assets(reports=None):
     reports = reports or os.environ.get("FUELCORE_CBS_REPORTS")
     if not reports:
-        raise RpxError("請將 FUELCORE_CBS_REPORTS 指向本機 CBS 報表資料夾")
-    assets = ReportAssets(reports)
+        raise RpxError("請在「設定 → 列印」選擇本機 CBS 報表資料夾並儲存。"
+                       "資料夾需包含 N5203.Rpt、N5203CUS.Rpt 及範本使用的 BMP。")
+    return ReportAssets(reports)
+
+
+def validate_report_assets(reports=None):
+    assets = report_assets(reports)
+    for name in REPORT_TEMPLATES:
+        picture = assets.page(name).text("PictureFile").strip()
+        if picture:
+            assets.find(picture)
+
+
+def report_resources(reports=None, cache=None):
+    assets = report_assets(reports)
     cache = cache or os.environ.get("FUELCORE_REPORT_CACHE") or (
         Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "fuelcore" / "report-backgrounds")
     return assets, safe_destination(cache, assets)
@@ -116,7 +132,7 @@ def render_report(settings, sersnos, output, *, reports=None, cache=None, connec
         import pypdfium2  # noqa: F401  Check the PDF preview runtime before creating any outputs.
         from .pdf import preview_pngs, render_pdf
     except ImportError as error:
-        raise RpxError("請先安裝列印相依套件：python -m pip install .[report]") from error
+        raise RpxError(f"無法載入列印相依套件（{error}）。使用原始碼時請執行 python -m pip install .[report]。") from error
 
     batch = prepare_report(settings, sersnos, reports=reports, cache=cache, connection=connection)
     output = safe_destination(output, batch.assets)

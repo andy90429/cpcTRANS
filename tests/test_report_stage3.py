@@ -15,7 +15,7 @@ from unittest.mock import patch
 from fuelcore.report import ReportBatch
 from fuelcore.report.calc import ItemInput, OriginalItem, Trial
 from fuelcore.report.editing import EditableReport, TrialFields, report_ids
-from fuelcore.report.rpx import RpxDocument
+from fuelcore.report.rpx import RpxDocument, RpxError
 
 from test_edi import load_fixture_tables, settings
 from test_printing import FakePrinter
@@ -34,6 +34,59 @@ def changed_first(trial, quantity, price="902.70", density=None):
 
 
 class TrialTest(unittest.TestCase):
+    def test_editing_item_quantity_recalculates_the_report_in_memory(self):
+        trial = sample_trial()
+        original = trial.calculate()
+        page = component("TGPage", "Front", 0, 0, 400, 600)
+        fields = [("FOREX", original.exchange), ("SHIPNAME", "ORIGINAL SHIP")]
+        quantities, prices = [], []
+        for item in trial.items:
+            quantities.append(len(fields) + 1)
+            prices.append(len(fields) + 2)
+            fields.extend((("項次號碼", item.number), ("數量", item.quantity), ("UNITAMT", item.price),
+                           ("報單淨重", item.net), ("DUTYAMT", item.twd), ("數量單位", item.unit),
+                           ("統計數量", item.liters), ("統計單位", item.stat_unit)))
+        fields.extend((("TOT_NETWT", original.net), ("TWDPRICE", original.twd), ("TOTALAMT", original.usd),
+                       ("EXPQUAN", original.quantity), ("GWEIGHT", original.gross), ("PKGTOTAL", original.packages),
+                       ("TAXAMT", original.fee), ("TAXTOTAL", original.tax_total)))
+        page.children = [component("TGTxt", f"Field{top}", 0, top, 100, 12,
+                                   PrtConditions=key, Caption=str(value))
+                         for top, (key, value) in enumerate(fields)]
+        document = RpxDocument.create("測試", [page])
+        report = EditableReport(ReportBatch(["TEST00A10E0777"], None, None, [(page, False)], [page], []),
+                                document, deepcopy([page]), {})
+        original_rpx = document.to_bytes()
+
+        with patch("fuelcore.report.editing.new_copy") as write, patch("fuelcore.report.editing.Database") as database:
+            unchanged = report.edit(0, quantities[0], "20.00")
+            self.assertEqual(unchanged.document.to_bytes(), original_rpx)
+            caption_edits = report.edit(0, 1, "UPDATED SHIP").edit(0, prices[0], "PRICE NOTE").edit(0, 0, "RATE NOTE")
+            with self.assertRaisesRegex(RpxError, "有效的非負數值"):
+                caption_edits.edit(0, quantities[0], "21 TNE")
+            updated = caption_edits.edit(0, quantities[0], "21")
+            inputs = updated.inputs(0)
+            with_density = updated.apply(0, (inputs[0], ItemInput(D("26"), inputs[1].price, D("0.923")), inputs[2]))
+            updated_again = with_density.edit(0, quantities[0], "22")
+            write.assert_not_called()
+            database.assert_not_called()
+
+        front = updated.batch.fronts[0]
+        self.assertEqual(front.children[1].text("Caption"), "UPDATED SHIP")
+        self.assertEqual(caption_edits.batch.fronts[0].children[prices[0]].text("Caption"), "PRICE NOTE")
+        self.assertIs(updated.document.roots[0], front)
+        self.assertIs(updated.batch.pages[0][0], front)
+        self.assertEqual(updated.inputs(0)[0], ItemInput(D("21"), D("902.70")))
+        self.assertEqual(updated.exchange(0), D("32.215"))
+        _, current = updated.correction_values(0, None, None)
+        self.assertEqual((current.quantity, current.usd, current.twd, current.net, current.fee),
+                         (D("106"), D("105923.70"), D("3412332"), D("106000"), D("1364")))
+        self.assertEqual((current.rows[0].liters, current.rows[0].twd), (D("22845"), D("610690")))
+        self.assertEqual(updated_again.inputs(0)[1], ItemInput(D("26"), D("1312.20"), D("0.923")))
+        _, with_density_values = updated_again.correction_values(0, None, None)
+        expected = trial.calculate(updated_again.inputs(0))
+        self.assertEqual(with_density_values.rows[1], expected.rows[1])
+        self.assertEqual(report.document.to_bytes(), original_rpx)
+
     def test_correction_uses_original_and_current_report_captions(self):
         page = component("TGPage", "Front", 0, 0, 400, 600)
         fields = [
@@ -240,6 +293,8 @@ class EditableReportTest(unittest.TestCase):
 
     def test_gui_load_trial_and_confirm_print(self):
         import tkinter as tk
+        from tkinter import ttk
+
         from fuelcore.gui import Workbench
         from fuelcore.report.printing import plan_print
 
@@ -274,6 +329,8 @@ class EditableReportTest(unittest.TestCase):
             await_task()
             self.assertEqual(page.pages.current(), 0)
             self.assertEqual(len(page.pages["values"]), 4)
+            self.assertEqual(tuple(page.buttons), ("修改欄位", "修改數量", "列印報單", "列印更正申請書",
+                                                   "輸出 PDF", "更正申請書 Excel", "另存 Rpx"))
             with patch.object(page.canvas, "winfo_width", return_value=1124), \
                     patch.object(page.canvas, "winfo_height", return_value=824), \
                     patch.object(page.canvas, "winfo_fpixels", return_value=144):
@@ -295,11 +352,24 @@ class EditableReportTest(unittest.TestCase):
             self.assertEqual(dialog.exchange_entry.get(), "32.215")
             dialog.values[0][0].set("21")
             self.assertIn("1,364", dialog.total.get())
-            dialog.apply_button.invoke()
+            dialog.window.destroy()
+
+            page.buttons["修改欄位"].invoke()
+            window = next(widget for widget in page.page.winfo_children() if isinstance(widget, tk.Toplevel))
+            picker = next(widget for widget in window.winfo_children() if isinstance(widget, ttk.Combobox))
+            editor = next(widget for widget in window.winfo_children() if isinstance(widget, tk.Text))
+            front = page.report.batch.fronts[0]
+            quantity = TrialFields(front).items[0][1]["quantity"]
+            picker.current(next(i for i, (position, _, _) in enumerate(page.report.fields(0))
+                                if front.children[position] is quantity))
+            editor.delete("1.0", "end")
+            editor.insert("1.0", "21")
+            next(widget for widget in window.winfo_children() if isinstance(widget, ttk.Button)).invoke()
             await_task()
             self.assertEqual(set(self.output.rglob("*")), files)
             self.assertEqual(page.dirty_notice.get(), "已修改，未存檔")
             self.assertFalse(page.buttons["另存 Rpx"].instate(["disabled"]))
+            self.assertEqual(page.report.correction_values(0, None, None)[1].fee, D("1364"))
 
             with patch("fuelcore.report_view.messagebox.askyesnocancel", return_value=None) as ask:
                 page.pages.current(1)
@@ -325,11 +395,11 @@ class EditableReportTest(unittest.TestCase):
                 page, "settings", return_value=self.settings
             ), patch("fuelcore.report_view.messagebox.askokcancel", side_effect=respond):
                 respond.yes = False
-                page.buttons["直接列印"].invoke()
+                page.buttons["列印報單"].invoke()
                 await_task()
                 self.assertFalse(printer.opens)
                 respond.yes = True
-                page.buttons["直接列印"].invoke()
+                page.buttons["列印報單"].invoke()
                 await_task()
                 self.assertEqual(len(printer.opens), 1)
                 self.assertIn("21.00", [text[0] for text in printer.job.pages[0][1]])

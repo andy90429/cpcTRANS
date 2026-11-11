@@ -239,6 +239,11 @@ class Workbench:
         if name == "送收信":
             self.activate_edi_tab()
 
+    def show_print_settings(self):
+        self.show("設定")
+        if self.active_page == "設定":
+            self.settings_notebook.select(self.settings_pages.print_page)
+
     def raise_dialogs(self, event):
         if event.widget is not self.root:
             return

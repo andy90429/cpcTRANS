@@ -105,6 +105,7 @@ class SettingsPagesTest(unittest.TestCase):
         from tkinter import ttk
 
         from fuelcore.gui import Workbench
+        from fuelcore.report.rpx import Component, RpxDocument
 
         save_options(self.config, {"app": {"admin_password": "測試"}})
         try:
@@ -198,12 +199,27 @@ class SettingsPagesTest(unittest.TestCase):
         self.assertEqual(self.settings().countries["TESTAA"], ("ZZ", "TEST COUNTRY"))
 
         with patch("fuelcore.settings_view.list_printers", return_value=("TEST PRINTER",)):
-            pages.reload_printers()
+            app.show("報單列印")
+            app.show_print_settings()
+            root.update()
             wait()
+        self.assertEqual(notebook.select(), str(tabs["列印"]))
         self.assertEqual(tuple(pages.printer.cget("values")), ("TEST PRINTER",))
         pages.printer.set("TEST PRINTER")
+        reports = self.config.parent / "TEST 報表"
+        reports.mkdir()
+        page = Component("TGPage")
+        page.children.append(Component("TGTxt"))
+        data = RpxDocument.create("TEST", [page]).to_bytes()
+        for name in ("N5203.Rpt", "N5203CUS.Rpt"):
+            (reports / name).write_bytes(data)
+        with patch("fuelcore.settings_view.filedialog.askdirectory", return_value=str(reports)):
+            pages.choose_reports()
+        self.assertEqual(pages.forms["print", "reports_dir"][0].get(), str(reports))
+        set_form("print", "reports_dir", reports.name)
         click_save("列印")
         self.assertEqual(self.settings().printer, "TEST PRINTER")
+        self.assertEqual(self.settings().reports_dir, reports)
 
         set_form("notify", "poll_seconds", "20")
         pages.forms["notify", "c3_pdfs"][0].insert("1.0", "{SERSNO}.pdf\nTEST/*.pdf")
