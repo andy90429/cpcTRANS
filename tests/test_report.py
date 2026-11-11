@@ -131,11 +131,13 @@ class ReportPdfTest(unittest.TestCase):
             front.children[0].set_text("Caption", REPORTS[0])
             (refs / "old.Rpx").write_bytes(RpxDocument.create("測試", [front]).to_bytes())
             connection.executescript("""
-                CREATE TABLE cusdec (SERSNO, MSGCODE, CUSISCODE, CUSISDATE);
+                CREATE TABLE cusdec (SERSNO, MSGCODE, CUSISCODE, CUSISDATE, `買方編號`);
                 CREATE TABLE invitem (SERSNO, MSGCODE, `項次號碼`);
+                CREATE TABLE mybuyer (BY002 TEXT PRIMARY KEY);
                 CREATE TABLE n5107 (`報單號碼`, `通關方式`, `接收日期時間`, `訊息參考號碼`);
-                INSERT INTO cusdec VALUES ('TEST00A10E0777','5203S','',NULL);
+                INSERT INTO cusdec VALUES ('TEST00A10E0777','5203S','',NULL,'TESTBUYER');
                 INSERT INTO invitem VALUES ('TEST00A10E0777','5203S',1);
+                INSERT INTO mybuyer VALUES ('TESTBUYER');
                 INSERT INTO n5107 VALUES ('TEST00A10E0777','C2','2026-11-09 12:00:00','202611090001');
             """)
             statements = []

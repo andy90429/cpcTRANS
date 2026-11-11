@@ -51,6 +51,12 @@ class Database:
             rows = self.select("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
         return {row[0].casefold(): row[0] for row in rows}
 
+    def column_names(self, table, schema=None):
+        sql = f"SELECT * FROM {self.table(table, schema)} LIMIT 0"
+        with closing(self.connection.cursor()) as cursor:
+            cursor.execute(sql)
+            return {column[0].casefold() for column in cursor.description}
+
     def require_select(self, sql):
         if self.read_only and not sql.lstrip().upper().startswith("SELECT "):
             raise ValueError("唯讀資料庫只接受 SELECT")

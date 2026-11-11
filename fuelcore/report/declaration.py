@@ -72,6 +72,7 @@ class DeclarationReader:
         self.edi_tables = db.table_names(self.edi_schema) if db.mysql and self.edi_schema else self.tables if not db.mysql else {}
         self.code_schema = getattr(settings, "code_database", None)
         self.code_tables = db.table_names(self.code_schema) if db.mysql else self.tables
+        self.code_columns = {}
 
     def rows(self, name, sersno, message=None):
         table = self.tables.get(name.casefold())
@@ -102,7 +103,15 @@ class DeclarationReader:
         name = self.code_tables.get(table.casefold())
         if not name or not as_text(value).strip():
             return []
-        columns = ", ".join(f"{identifier(column)} AS {identifier(alias)}" for column, alias in fields.items())
+        if name not in self.code_columns:
+            self.code_columns[name] = self.db.column_names(name, self.code_schema)
+        available = self.code_columns[name]
+        if key.casefold() not in available or (condition and condition[0].casefold() not in available):
+            return []
+        columns = ", ".join(f"{identifier(column)} AS {identifier(alias)}" for column, alias in fields.items()
+                            if column.casefold() in available)
+        if not columns:
+            return []
         sql = f"SELECT {columns} FROM {self.db.table(name, self.code_schema)} WHERE {identifier(key)} = ?"
         params = (value,)
         if condition:
@@ -136,7 +145,7 @@ class DeclarationReader:
         agent = self.lookup("MyDeclareContainerNo", "DCN004", header.get("CUSMANNO"),
                             {"DCN005": "專責人姓名", "DCN002": "編號"})
         tables["帶值_報關行箱號"] = agent
-        tables["帶值_報關行代碼"] = self.lookup("MyDeclareTrade", "DT002", agent[0]["編號"] if agent else "",
+        tables["帶值_報關行代碼"] = self.lookup("MyDeclareTrade", "DT002", agent[0].get("編號") if agent else "",
                                              {"DT004": "中文名稱", "DT010": "負責人"})
         for row in tables["CUSDEC_4"]:
             row["BANCUSNO"] = f"製造保稅廠統一編號:{row.get('REBAN', '')} 監管編號:{row.get('RECUSNO', '')}" if row.get("REBAN") else ""
